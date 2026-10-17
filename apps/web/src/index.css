@@ -1,0 +1,63 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-nebula-950 text-slate-200 antialiased;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Honours the "reduced motion" accessibility setting toggled in user settings. */
+.reduce-motion *,
+.reduce-motion *::before,
+.reduce-motion *::after {
+  animation-duration: 0.001ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.001ms !important;
+  scroll-behavior: auto !important;
+}
+
+/* Thin scrollbars that suit a chat surface. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: theme("colors.nebula.700") transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: theme("colors.nebula.700");
+  border-radius: 8px;
+}
+
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-nebula-accent text-white hover:bg-nebula-accent/90;
+  }
+  .btn-ghost {
+    @apply btn bg-transparent text-slate-300 hover:bg-white/5;
+  }
+  .btn-danger {
+    @apply btn bg-nebula-danger/15 text-nebula-danger hover:bg-nebula-danger/25;
+  }
+  .input {
+    @apply w-full rounded-md border border-nebula-700 bg-nebula-900 px-3 py-2 text-sm text-slate-100 placeholder-slate-500 outline-none focus:border-nebula-accent;
+  }
+  .card {
+    @apply rounded-lg border border-nebula-700 bg-nebula-900;
+  }
+}

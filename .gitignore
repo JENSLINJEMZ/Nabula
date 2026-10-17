@@ -1,0 +1,17 @@
+node_modules/
+dist/
+build/
+coverage/
+*.log
+.env
+.env.local
+.env.*.local
+.cache/
+.DS_Store
+apps/web/dist/
+apps/server/dist/
+test-results/
+playwright-report/
+apps/web/e2e/.auth/
+apps/server/data/uploads/
+apps/server/data/tmp/

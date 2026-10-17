@@ -1,0 +1,35 @@
+# Isolated Postgres + Redis for Nebula development.
+# Non-default host ports (55432/56379) so this never collides with other
+# containers or local services already bound to 5432/6379.
+services:
+  nebula-postgres:
+    image: postgres:16-alpine
+    container_name: nebula-postgres
+    environment:
+      POSTGRES_USER: nebula
+      POSTGRES_PASSWORD: nebula
+      POSTGRES_DB: nebula
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - nebula-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nebula -d nebula"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  nebula-redis:
+    image: redis:7-alpine
+    container_name: nebula-redis
+    command: ["redis-server", "--appendonly", "no", "--save", ""]
+    ports:
+      - "127.0.0.1:56379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  nebula-pg-data:

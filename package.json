@@ -1,0 +1,30 @@
+{
+  "name": "nebula",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Nebula — a Discord-inspired, real-time communication platform (independent implementation).",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "npm run dev --workspace @nebula/server & npm run dev --workspace @nebula/web",
+    "dev:server": "npm run dev --workspace @nebula/server",
+    "dev:web": "npm run dev --workspace @nebula/web",
+    "build": "npm run build --workspace @nebula/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspace @nebula/shared && npm run test --workspace @nebula/server",
+    "test:e2e": "npm run test:e2e --workspace @nebula/web",
+    "db:migrate": "npm run db:migrate --workspace @nebula/server",
+    "seed": "npm run seed --workspace @nebula/server"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "esbuild@0.21.5": true,
+    "esbuild@0.25.12": true
+  }
+}
