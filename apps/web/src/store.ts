@@ -46,10 +46,21 @@ export { applyRealtime } from "./realtime";
 
 /* ----------------------------------------------------------------- state */
 
-/** localStorage keys used to restore the last viewed location across reloads. */
-const LAST_GUILD_KEY = "nebula:lastGuild";
-const LAST_CHANNEL_KEY = "nebula:lastChannel";
-const LAST_DM_KEY = "nebula:lastDm";
+/** localStorage keys used to remember the last viewed location (used by the `/` redirect). */
+export const LAST_GUILD_KEY = "nebula:lastGuild";
+export const LAST_CHANNEL_KEY = "nebula:lastChannel";
+export const LAST_DM_KEY = "nebula:lastDm";
+
+/**
+ * Router bridge. The Zustand store lives outside React's router, so navigation
+ * triggered by store actions (selectGuild/selectChannel/selectDm) is delegated
+ * through this hook. `setRouterNavigator` is called by <NavigationBridge/> which
+ * renders inside <BrowserRouter> in App.tsx.
+ */
+let navTo: ((path: string) => void) | null = null;
+export function setRouterNavigator(fn: ((path: string) => void) | null): void {
+  navTo = fn;
+}
 
 export interface Overwrite {
   targetId: string;
@@ -117,8 +128,7 @@ export interface AppState {
   dismissToast: () => void;
 
   loadGuilds: () => Promise<void>;
-  selectGuild: (guildId: string | null) => Promise<void>;
-  restoreLastView: () => Promise<void>;
+  selectGuild: (guildId: string | null, opts?: { channelId?: string }) => Promise<void>;
   loadChannels: (guildId: string) => Promise<void>;
   selectChannel: (channelId: string | null) => Promise<void>;
   createGuild: (name: string) => Promise<void>;
@@ -275,7 +285,6 @@ export const useApp = create<AppState>()((set, get) => {
           set({ me: res.user });
           await Promise.all([get().loadGuilds(), get().loadDms(), get().loadRelationships(), get().loadReadStates()]);
           void get().loadNotifications();
-          await get().restoreLastView();
           await get().connectRealtime();
         }
       } catch {
@@ -290,7 +299,6 @@ export const useApp = create<AppState>()((set, get) => {
       set({ me: res.user });
       await Promise.all([get().loadGuilds(), get().loadDms(), get().loadRelationships(), get().loadReadStates()]);
       void get().loadNotifications();
-      await get().restoreLastView();
       await get().connectRealtime();
     },
 
@@ -323,6 +331,7 @@ export const useApp = create<AppState>()((set, get) => {
           activeDmId: null,
           ready: false,
         });
+        navTo?.("/");
       }
     },
 
@@ -341,7 +350,7 @@ export const useApp = create<AppState>()((set, get) => {
       set({ guilds: res.guilds });
     },
 
-    async selectGuild(guildId) {
+    async selectGuild(guildId, opts) {
       set({ activeGuildId: guildId, activeChannelId: null, activeDmId: null });
       try {
         if (guildId) localStorage.setItem(LAST_GUILD_KEY, guildId);
@@ -349,7 +358,10 @@ export const useApp = create<AppState>()((set, get) => {
       } catch {
         /* storage unavailable */
       }
-      if (!guildId) return;
+      if (!guildId) {
+        navTo?.("/channels/@me");
+        return;
+      }
       await Promise.all([get().loadChannels(guildId), get().loadRoles(guildId), get().loadMembers(guildId)]);
       const perms = await run(async () =>
         apiGet<{ permissions: string; isOwner: boolean }>(`/api/guilds/${guildId}/permissions`),
@@ -361,29 +373,10 @@ export const useApp = create<AppState>()((set, get) => {
         }));
       }
       const channels = get().channelsByGuild[guildId] ?? [];
-      const firstText = channels.find((c) => c.type === 0);
-      if (firstText) await get().selectChannel(firstText.id);
-    },
-
-    async restoreLastView() {
-      try {
-        const lastGuild = localStorage.getItem(LAST_GUILD_KEY);
-        const lastChannel = localStorage.getItem(LAST_CHANNEL_KEY);
-        const lastDm = localStorage.getItem(LAST_DM_KEY);
-        if (lastGuild && get().guilds.some((g) => g.id === lastGuild)) {
-          await get().selectGuild(lastGuild);
-          const channels = get().channelsByGuild[lastGuild] ?? [];
-          if (lastChannel && channels.some((c) => c.id === lastChannel)) {
-            await get().selectChannel(lastChannel);
-          }
-          return;
-        }
-        if (lastDm && get().dms.some((d) => d.id === lastDm)) {
-          await get().selectDm(lastDm);
-        }
-      } catch {
-        /* restore is best-effort */
-      }
+      const target =
+        (opts?.channelId ? channels.find((c) => c.id === opts.channelId) : undefined) ??
+        channels.find((c) => c.type === 0);
+      if (target) await get().selectChannel(target.id);
     },
 
     async loadChannels(guildId) {
@@ -399,6 +392,8 @@ export const useApp = create<AppState>()((set, get) => {
         } catch {
           /* storage unavailable */
         }
+        const guildId = get().activeGuildId;
+        if (guildId) navTo?.(`/channels/${guildId}/${channelId}`);
         await get().loadMessages(channelId);
         void get().ackChannel(channelId);
       }
@@ -590,6 +585,7 @@ export const useApp = create<AppState>()((set, get) => {
         } catch {
           /* storage unavailable */
         }
+        navTo?.(`/channels/@me/${channelId}`);
         await get().loadMessages(channelId);
         void get().ackChannel(channelId);
       }

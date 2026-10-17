@@ -1,7 +1,8 @@
 import { useEffect } from "react";
+import { BrowserRouter } from "react-router-dom";
 import { useApp } from "./store";
 import { AuthScreen } from "./components/Auth";
-import { ChatShell } from "./components/Chat";
+import { AppRoutes } from "./routes";
 import { ToastHost } from "./components/Toast";
 
 export default function App() {
@@ -27,9 +28,11 @@ export default function App() {
   }
 
   return (
-    <div className="h-full">
-      {me ? <ChatShell /> : <AuthScreen />}
-      <ToastHost toast={toast} onClose={dismissToast} />
-    </div>
+    <BrowserRouter>
+      <div className="h-full">
+        {me ? <AppRoutes /> : <AuthScreen />}
+        <ToastHost toast={toast} onClose={dismissToast} />
+      </div>
+    </BrowserRouter>
   );
 }
