@@ -4,6 +4,7 @@ import {
   ChannelType,
   Errors,
   Limits,
+  MessageType,
   Permissions,
   applyImplicitPermissions,
   computeChannelPermissions,
@@ -675,6 +676,14 @@ export async function addGroupDmRecipient(
   );
   await assertNoBlockedPairs([...current.map((r) => r.user_id), targetUserId]);
   await execute(`INSERT INTO dm_recipients (channel_id, user_id) VALUES ($1, $2)`, [channelId, targetUserId]);
+  // Timeline entry so members see who joined and when.
+  const { createSystemMessage } = await import("./messages.js");
+  await createSystemMessage({
+    channelId,
+    authorId: actorId,
+    type: MessageType.RECIPIENT_ADD,
+    content: `added ${await userLabel(targetUserId)}.`,
+  });
   return row;
 }
 
@@ -729,7 +738,30 @@ export async function removeGroupDmRecipient(
     const channel = updated.rows[0];
     if (!channel) throw Errors.INTERNAL(undefined, "Group DM disappeared while updating it");
     return { channel, removedUserId: targetUserId, memberIds, closed };
+  }).then(async (result) => {
+    // Timeline entry for a removal, unless the group just closed for everyone
+    // (in which case nobody will see the conversation again).
+    if (!result.closed) {
+      const { createSystemMessage } = await import("./messages.js");
+      await createSystemMessage({
+        channelId,
+        authorId: actorId,
+        type: MessageType.RECIPIENT_REMOVE,
+        content:
+          actorId === targetUserId ? "left the group." : `removed ${await userLabel(targetUserId)}.`,
+      });
+    }
+    return result;
   });
+}
+
+/** Display label for a user id (display name, falling back to username). */
+async function userLabel(userId: string): Promise<string> {
+  const row = await queryOne<{ display_name: string | null; username: string }>(
+    `SELECT display_name, username FROM users WHERE id = $1`,
+    [userId],
+  );
+  return row?.display_name ?? row?.username ?? "someone";
 }
 
 export async function listDmChannels(userId: string): Promise<WireChannel[]> {

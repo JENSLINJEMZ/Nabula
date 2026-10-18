@@ -27,6 +27,7 @@ import {
 import { createNotification } from "./notifications.js";
 import { assertChannelAccess } from "./permissions.js";
 import { getAllBlockedEitherDirection } from "./relationships.js";
+import { readKeyedBlob, saveAttachment } from "./storage.js";
 
 const USER_COLUMNS = `id, username, discriminator, display_name, avatar_key, banner_key, accent_color, bio,
   bot, premium_type, email, email_verified, flags, created_at`;
@@ -305,21 +306,7 @@ export async function createMessage(input: CreateMessageInput): Promise<WireMess
     }
 
     // Slowmode (bypassed by ADMINISTRATOR or BYPASS_SLOWMODE).
-    const canBypass =
-      (permissions & Permissions.ADMINISTRATOR) !== 0n || (permissions & Permissions.BYPASS_SLOWMODE) !== 0n;
-    if (channel.rate_limit_per_user > 0 && !canBypass) {
-      const last = await queryOne<{ created_at: Date }>(
-        `SELECT created_at FROM messages WHERE channel_id = $1 AND author_id = $2 AND deleted_at IS NULL
-          ORDER BY id DESC LIMIT 1`,
-        [input.channelId, input.authorId],
-      );
-      if (last) {
-        const elapsed = (Date.now() - last.created_at.getTime()) / 1000;
-        if (elapsed < channel.rate_limit_per_user) {
-          throw Errors.SLOWMODE_ACTIVE({ retry_after: channel.rate_limit_per_user - elapsed });
-        }
-      }
-    }
+    await assertNotSlowmode(channel, input.authorId, permissions);
 
     if (attachmentIds.length > 0 && (permissions & Permissions.ATTACH_FILES) !== Permissions.ATTACH_FILES) {
       throw Errors.MISSING_PERMISSIONS({ permission: "ATTACH_FILES" });
@@ -437,6 +424,185 @@ export async function createMessage(input: CreateMessageInput): Promise<WireMess
   return message;
 }
 
+/**
+ * Slowmode gate shared by message creation and forwarding: throws
+ * SLOWMODE_ACTIVE unless the author may bypass it (ADMINISTRATOR or
+ * BYPASS_SLOWMODE).
+ */
+async function assertNotSlowmode(channel: ChannelRowFull, authorId: string, permissions: bigint): Promise<void> {
+  const canBypass =
+    (permissions & Permissions.ADMINISTRATOR) !== 0n || (permissions & Permissions.BYPASS_SLOWMODE) !== 0n;
+  if (channel.rate_limit_per_user <= 0 || canBypass) return;
+  const last = await queryOne<{ created_at: Date }>(
+    `SELECT created_at FROM messages WHERE channel_id = $1 AND author_id = $2 AND deleted_at IS NULL
+      ORDER BY id DESC LIMIT 1`,
+    [channel.id, authorId],
+  );
+  if (last) {
+    const elapsed = (Date.now() - last.created_at.getTime()) / 1000;
+    if (elapsed < channel.rate_limit_per_user) {
+      throw Errors.SLOWMODE_ACTIVE({ retry_after: channel.rate_limit_per_user - elapsed });
+    }
+  }
+}
+
+/**
+ * Insert a server-authored system message (pins, group-DM membership changes,
+ * joins). Callers have already authorized the underlying action, so this
+ * performs no permission checks, mention parsing, or notifications — it only
+ * records the timeline entry and broadcasts it.
+ */
+export async function createSystemMessage(input: {
+  channelId: string;
+  authorId: string;
+  type: number;
+  content: string;
+}): Promise<WireMessage> {
+  const channel = await requireChannelRow(input.channelId);
+  const messageId = nextId();
+  await withTransaction(async (tx) => {
+    await tx.query(
+      `INSERT INTO messages (id, channel_id, guild_id, author_id, content, type)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [messageId, input.channelId, channel.guild_id, input.authorId, input.content, input.type],
+    );
+    await setLastMessageId(tx as unknown as Queryable, input.channelId, messageId);
+  });
+
+  const assembled = await assembleMessages(input.authorId, [(await getMessageRow(messageId)) as MessageRow]);
+  const message = assembled[0];
+  if (!message) throw Errors.INTERNAL(undefined, "Failed to assemble system message");
+  bus().toChannel(input.channelId, ServerEvents.MESSAGE_CREATE, message);
+  return message;
+}
+
+/** `reference_type` marking a cross-channel forward (replies use 0). */
+export const REFERENCE_TYPE_FORWARD = 1;
+
+interface SourceAttachmentRow {
+  id: string;
+  filename: string;
+  content_type: string | null;
+  is_spoiler: boolean;
+  storage_key: string;
+}
+
+/**
+ * Forward a message into other channels or DMs the actor can post in. Each
+ * copy keeps the original content, carries a cross-channel reference back to
+ * the source (`reference_type` 1) so clients render attribution, and has the
+ * source's attachments re-stored under the target channel's authorization so
+ * target viewers can read them while source-only viewers cannot. Mentions in
+ * the copied content never re-ping; slowmode and block rules still apply.
+ */
+export async function forwardMessage(
+  messageId: string,
+  actorId: string,
+  targetChannelIds: string[],
+): Promise<WireMessage[]> {
+  const targets = [...new Set(targetChannelIds)];
+  if (targets.length === 0) {
+    throw Errors.VALIDATION_FAILED({ field: "channelIds" }, "At least one target channel is required.");
+  }
+  if (targets.length > Limits.FORWARD_TARGETS_MAX) {
+    throw Errors.VALIDATION_FAILED(
+      { field: "channelIds" },
+      `At most ${Limits.FORWARD_TARGETS_MAX} targets per forward.`,
+    );
+  }
+
+  const source = await getMessageRow(messageId);
+  if (!source) throw Errors.UNKNOWN_MESSAGE();
+  await assertChannelAccess(source.channel_id, actorId, Permissions.VIEW_CHANNEL | Permissions.READ_MESSAGE_HISTORY);
+  if (targets.includes(source.channel_id)) {
+    throw Errors.VALIDATION_FAILED({ field: "channelIds" }, "Cannot forward a message to its own channel.");
+  }
+
+  const sourceAttachments = await query<SourceAttachmentRow>(
+    `SELECT id, filename, content_type, is_spoiler, storage_key
+       FROM attachments WHERE message_id = $1 ORDER BY id ASC`,
+    [messageId],
+  );
+  const blocked = await getAllBlockedEitherDirection(actorId);
+  const created: WireMessage[] = [];
+
+  for (const targetId of targets) {
+    const access = await assertChannelAccess(targetId, actorId, Permissions.VIEW_CHANNEL);
+
+    if (access.channel.guild_id) {
+      if ((access.permissions & Permissions.SEND_MESSAGES) !== Permissions.SEND_MESSAGES) {
+        throw Errors.MISSING_PERMISSIONS({ permission: "SEND_MESSAGES" });
+      }
+      const channel = await requireChannelRow(targetId);
+      await assertNotSlowmode(channel, actorId, access.permissions);
+    } else {
+      // DM / group DM: block checks against every other recipient (mirrors
+      // createMessage; recipient membership is enforced by assertChannelAccess).
+      const recipients = await query<{ user_id: string }>(
+        `SELECT user_id FROM dm_recipients WHERE channel_id = $1`,
+        [targetId],
+      );
+      for (const r of recipients) {
+        if (r.user_id !== actorId && blocked.has(r.user_id)) throw Errors.BLOCKED();
+      }
+    }
+
+    // System-message sources (pins, joins, …) forward as plain messages.
+    const type =
+      source.type === MessageType.DEFAULT || source.type === MessageType.REPLY ? MessageType.DEFAULT : source.type;
+
+    const newId = nextId();
+    await withTransaction(async (tx) => {
+      await tx.query(
+        `INSERT INTO messages (id, channel_id, guild_id, author_id, content, type,
+                               reference_message_id, reference_channel_id, reference_type)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [
+          newId,
+          targetId,
+          access.channel.guild_id,
+          actorId,
+          source.content,
+          type,
+          source.id,
+          source.channel_id,
+          REFERENCE_TYPE_FORWARD,
+        ],
+      );
+      await setLastMessageId(tx as unknown as Queryable, targetId, newId);
+    });
+
+    // Copy attachments into the target's authorization scope. Bytes are
+    // re-stored under a fresh key so each copy is independently deletable.
+    for (const att of sourceAttachments) {
+      let buffer: Buffer;
+      try {
+        buffer = await readKeyedBlob(att.storage_key);
+      } catch {
+        continue; // source file is gone; forward the text without it
+      }
+      const copy = await saveAttachment({
+        buffer,
+        filename: att.filename,
+        declaredContentType: att.content_type,
+        uploaderId: actorId,
+        channelId: targetId,
+        guildId: access.channel.guild_id,
+        isSpoiler: att.is_spoiler,
+      });
+      await execute(`UPDATE attachments SET message_id = $1 WHERE id = $2`, [newId, copy.id]);
+    }
+
+    const row = (await getMessageRow(newId)) as MessageRow;
+    const wire = (await assembleMessages(actorId, [row]))[0];
+    if (!wire) throw Errors.INTERNAL(undefined, "Failed to assemble forwarded message");
+    bus().toChannel(targetId, ServerEvents.MESSAGE_CREATE, wire);
+    created.push(wire);
+  }
+
+  return created;
+}
+
 function mentionRoleIdsAuthorized(roleIds: string[], mentionEveryone: boolean): string[] {
   // Role mentions are stored so clients can highlight; authorization is enforced
   // at notification time.
@@ -530,6 +696,9 @@ export async function editMessage(messageId: string, actorId: string, content: s
   if (!existing) throw Errors.UNKNOWN_MESSAGE();
 
   const access = await assertChannelAccess(existing.channel_id, actorId, Permissions.VIEW_CHANNEL);
+  if (existing.type !== MessageType.DEFAULT && existing.type !== MessageType.REPLY) {
+    throw Errors.FORBIDDEN(undefined, "System messages cannot be edited.");
+  }
   const isAuthor = existing.author_id === actorId;
   const canManage = (access.permissions & Permissions.MANAGE_MESSAGES) === Permissions.MANAGE_MESSAGES;
   if (!isAuthor && !canManage) throw Errors.FORBIDDEN(undefined, "You can only edit your own messages.");
@@ -696,6 +865,13 @@ export async function pinMessage(messageId: string, actorId: string): Promise<vo
     messageId,
     pinned: true,
   });
+  // Timeline marker mirroring the pin action (content is the pinned excerpt).
+  await createSystemMessage({
+    channelId: message.channel_id,
+    authorId: actorId,
+    type: MessageType.CHANNEL_PINNED_MESSAGE,
+    content: message.content.slice(0, 200),
+  });
 }
 
 export async function unpinMessage(messageId: string, actorId: string): Promise<void> {
@@ -778,7 +954,9 @@ export async function searchMessages(viewerId: string, options: SearchOptions): 
   if (channelIds.length === 0) return [];
 
   const params: unknown[] = [channelIds, q];
+  // System messages (pins, joins, group-DM membership) are excluded from search.
   let where = `channel_id = ANY($1::bigint[]) AND deleted_at IS NULL
+               AND type IN (${MessageType.DEFAULT}, ${MessageType.REPLY})
                AND to_tsvector('simple', content) @@ plainto_tsquery('simple', $2)`;
   if (options.authorId) {
     params.push(options.authorId);

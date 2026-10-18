@@ -199,6 +199,7 @@ export interface AppState {
   sendReply: (channelId: string, content: string, referenceMessageId: string) => Promise<void>;
   editMessage: (messageId: string, content: string) => Promise<void>;
   deleteMessage: (messageId: string) => Promise<void>;
+  forwardMessage: (messageId: string, channelIds: string[]) => Promise<number>;
   toggleReaction: (channelId: string, messageId: string, emoji: string, me: boolean) => Promise<void>;
   loadPins: (channelId: string) => Promise<void>;
   pinMessage: (messageId: string) => Promise<void>;
@@ -795,6 +796,24 @@ export const useApp = create<AppState>()((set, get) => {
           },
         }));
       }
+    },
+
+    async forwardMessage(messageId, channelIds) {
+      const res = await run(async () =>
+        apiPost<{ messages: Message[] }>(`/api/messages/${messageId}/forward`, { channelIds }),
+      );
+      if (!res) return 0;
+      // Refresh each destination so the copy is visible immediately even if a
+      // realtime push has not landed yet.
+      for (const id of new Set(res.messages.map((m) => m.channelId))) {
+        if (get().messagesByChannel[id]) await get().loadMessages(id);
+      }
+      const n = res.messages.length;
+      get().pushToast({
+        kind: "success",
+        message: `Forwarded to ${n} ${n === 1 ? "conversation" : "conversations"}.`,
+      });
+      return n;
     },
 
     async toggleReaction(channelId, messageId, emoji, me) {

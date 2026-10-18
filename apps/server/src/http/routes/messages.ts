@@ -6,6 +6,7 @@ import {
   createMessage,
   deleteMessage,
   editMessage,
+  forwardMessage,
   getMessageForViewer,
   getReadStates,
   listMessages,
@@ -113,6 +114,15 @@ export async function registerMessageRoutes(app: FastifyInstance): Promise<void>
       const { messageId } = z.object({ messageId: Id }).parse(request.params);
       await unpinMessage(messageId, currentUserId(request));
       return reply.status(204).send();
+    });
+
+    authed.post("/api/messages/:messageId/forward", async (request, reply) => {
+      const { messageId } = z.object({ messageId: Id }).parse(request.params);
+      const body = z
+        .object({ channelIds: z.array(Id).min(1).max(Limits.FORWARD_TARGETS_MAX) })
+        .parse(request.body);
+      const messages = await forwardMessage(messageId, currentUserId(request), body.channelIds);
+      return reply.status(201).send({ messages });
     });
 
     authed.get("/api/search", async (request, reply) => {

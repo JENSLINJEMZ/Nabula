@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from "react";
 import {
   Bell,
+  Forward,
   Hash,
   LogOut,
   MessageSquarePlus,
@@ -17,12 +18,13 @@ import {
   UserPlus,
   X,
 } from "lucide-react";
-import { ChannelType, Permissions, type Channel, type Message, type PublicUser } from "@nebula/shared";
+import { ChannelType, MessageType, Permissions, type Channel, type Message, type PublicUser } from "@nebula/shared";
 import { useApp } from "../store";
 import { hasBits } from "../lib/perms";
 import { renderMarkdown } from "../lib/markdown";
 import { avatarColor, cx, displayName, formatBytes, formatClock, dayKey, formatDayDivider, isSameGroup } from "../lib/ui";
 import { Avatar, IconButton } from "./primitives";
+import { ForwardModal } from "./ForwardModal";
 import { GroupDmModal } from "./GroupDmModal";
 
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "🚀", "👀", "🔥", "✅", "😮", "😢", "🙏", "💯"];
@@ -31,6 +33,17 @@ const EMOJI_PALETTE = [
   "❤️", "🔥", "✨", "🎉", "🚀", "💯", "✅", "❌", "⚠️", "👀", "💡", "🎯",
   "🍕", "☕", "🐍", "🦀", "🌈", "⭐", "🌙", "☀️", "🎮", "🎵", "📎", "📌",
 ];
+
+/** Message types rendered as compact, author-prefixed timeline entries. */
+const SYSTEM_MESSAGE_TYPES: ReadonlySet<number> = new Set([
+  MessageType.RECIPIENT_ADD,
+  MessageType.RECIPIENT_REMOVE,
+  MessageType.CALL,
+  MessageType.CHANNEL_NAME_CHANGE,
+  MessageType.CHANNEL_ICON_CHANGE,
+  MessageType.CHANNEL_PINNED_MESSAGE,
+  MessageType.USER_JOIN,
+]);
 
 /* --------------------------------------------------------- attachments */
 
@@ -142,6 +155,7 @@ function MessageRow({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(message.content);
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [forwardOpen, setForwardOpen] = useState(false);
 
   async function saveEdit() {
     const next = draft.trim();
@@ -155,6 +169,29 @@ function MessageRow({
   }
 
   const mentionHighlight = highlight || deps.mentions.some((u) => u.id === deps.selfId) || message.mentionEveryone;
+  const isForward = message.referencedMessage
+    ? message.referencedMessage.channelId !== message.channelId
+    : false;
+
+  // System messages (pins, group-DM membership, joins) render as a compact
+  // centered timeline entry with no hover actions.
+  if (SYSTEM_MESSAGE_TYPES.has(message.type)) {
+    return (
+      <div
+        id={`msg-${message.id}`}
+        className="flex items-center gap-2 px-4 py-1 text-xs text-slate-400"
+      >
+        <Avatar user={message.author} size={20} />
+        <p className="min-w-0 flex-1">
+          <span className="font-semibold text-slate-300">{displayName(message.author)}</span>{" "}
+          <span className="text-slate-400">{renderMarkdown(message.content, deps)}</span>
+          <time className="ml-2 text-[10px] text-slate-600" dateTime={message.timestamp}>
+            {formatClock(message.timestamp)}
+          </time>
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -167,7 +204,12 @@ function MessageRow({
     >
       {message.referencedMessage && (
         <div className="mb-0.5 flex items-center gap-1.5 pl-[52px] text-xs text-slate-500">
-          <Reply size={12} className="rotate-180" aria-hidden />
+          {isForward ? (
+            <Forward size={12} aria-hidden />
+          ) : (
+            <Reply size={12} className="rotate-180" aria-hidden />
+          )}
+          {isForward && <span className="font-medium text-slate-500">Forwarded</span>}
           <span className="font-medium text-slate-400">{displayName(message.referencedMessage.author)}</span>
           <span className="truncate">{message.referencedMessage.content || "(attachment)"}</span>
         </div>
@@ -278,6 +320,9 @@ function MessageRow({
         <IconButton title="Reply" onClick={() => onReply(message)}>
           <Reply size={15} aria-hidden />
         </IconButton>
+        <IconButton title="Forward" onClick={() => setForwardOpen(true)}>
+          <Forward size={15} aria-hidden />
+        </IconButton>
         {canThread && (
           <IconButton title={message.threadId ? "Open thread" : "Create thread"} onClick={() => onThread(message)}>
             <MessageSquarePlus size={15} aria-hidden />
@@ -337,6 +382,8 @@ function MessageRow({
           </div>
         </div>
       )}
+
+      {forwardOpen && <ForwardModal messageId={message.id} onClose={() => setForwardOpen(false)} />}
     </div>
   );
 }
