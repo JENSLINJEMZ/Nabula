@@ -37,6 +37,7 @@ import {
 import { Avatar, Dropdown, IconButton, MenuItem } from "./primitives";
 import { ChatView } from "./ChatView";
 import { Friends } from "./Friends";
+import { GroupDmModal } from "./GroupDmModal";
 import { VoicePanel } from "./VoicePanel";
 import { Settings } from "./Settings";
 import { ServerSettings } from "./ServerSettings";
@@ -538,13 +539,17 @@ function HomeSidebar() {
   const openDm = useApp((s) => s.openDm);
   const readStates = useApp((s) => s.readStates);
   const [tab, setTab] = useState<"friends" | "dms">("friends");
+  const [groupDmOpen, setGroupDmOpen] = useState(false);
 
   const friends = relationships.filter((r) => r.type === 1);
 
   return (
     <div className="flex min-h-0 w-60 shrink-0 flex-col bg-nebula-900">
-      <header className="flex h-12 shrink-0 items-center border-b border-nebula-800 px-4 font-semibold text-slate-100 shadow-sm">
-        Direct Messages
+      <header className="flex h-12 shrink-0 items-center justify-between border-b border-nebula-800 px-4 font-semibold text-slate-100 shadow-sm">
+        <span>Direct Messages</span>
+        <IconButton title="Create group DM" onClick={() => setGroupDmOpen(true)}>
+          <UserPlus size={16} aria-hidden />
+        </IconButton>
       </header>
 
       <div className="flex gap-1 p-2">
@@ -595,6 +600,7 @@ function HomeSidebar() {
                   <button
                     type="button"
                     onClick={() => void selectDm(dm.id)}
+                    aria-label={dm.type === 3 ? `${label} (group DM)` : undefined}
                     className={cx(
                       "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left",
                       dm.id === activeDmId ? "bg-nebula-800 text-slate-100" : "text-slate-400 hover:bg-white/5 hover:text-slate-200",
@@ -617,6 +623,8 @@ function HomeSidebar() {
           </ul>
         )}
       </div>
+
+      {groupDmOpen && <GroupDmModal mode="create" onClose={() => setGroupDmOpen(false)} />}
 
       <UserPanel />
     </div>

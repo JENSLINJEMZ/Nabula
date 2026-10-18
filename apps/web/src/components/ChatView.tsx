@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEven
 import {
   Bell,
   Hash,
+  LogOut,
   MessageSquarePlus,
   MessagesSquare,
   Paperclip,
@@ -13,14 +14,16 @@ import {
   Send,
   Smile,
   Trash2,
+  UserPlus,
   X,
 } from "lucide-react";
-import { Permissions, type Channel, type Message, type PublicUser } from "@nebula/shared";
+import { ChannelType, Permissions, type Channel, type Message, type PublicUser } from "@nebula/shared";
 import { useApp } from "../store";
 import { hasBits } from "../lib/perms";
 import { renderMarkdown } from "../lib/markdown";
 import { avatarColor, cx, displayName, formatBytes, formatClock, dayKey, formatDayDivider, isSameGroup } from "../lib/ui";
 import { Avatar, IconButton } from "./primitives";
+import { GroupDmModal } from "./GroupDmModal";
 
 const QUICK_REACTIONS = ["👍", "❤️", "😂", "🎉", "🚀", "👀", "🔥", "✅", "😮", "😢", "🙏", "💯"];
 const EMOJI_PALETTE = [
@@ -527,12 +530,14 @@ export function ChatView() {
   const activeThreadId = useApp((s) => s.activeThreadId);
   const createThread = useApp((s) => s.createThread);
   const openThread = useApp((s) => s.openThread);
+  const removeDmRecipient = useApp((s) => s.removeDmRecipient);
 
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<{ id: string; filename: string }[]>([]);
   const [sending, setSending] = useState(false);
   const [invite, setInvite] = useState<string | null>(null);
   const [replyTarget, setReplyTarget] = useState<Message | null>(null);
+  const [groupDmOpen, setGroupDmOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const lastTypedRef = useRef(0);
@@ -550,6 +555,18 @@ export function ChatView() {
     if (!activeGuildId) return null;
     return (channelsByGuild[activeGuildId] ?? []).find((c) => c.id === activeChannelId) ?? null;
   }, [channelsByGuild, dms, activeGuildId, activeChannelId, activeDmId, isDm]);
+
+  const dmOthers = useMemo(
+    () => (isDm && channel ? (channel.recipients ?? []).filter((u) => u.id !== me?.id) : []),
+    [isDm, channel, me?.id],
+  );
+  const isGroupDm = isDm && channel?.type === ChannelType.GROUP_DM;
+
+  async function leaveGroupDm() {
+    if (!channel || !me) return;
+    if (!window.confirm("Leave this group DM? You will lose access to its messages.")) return;
+    await removeDmRecipient(channel.id, me.id);
+  }
 
   const messages = conversationId ? messagesByChannel[conversationId] ?? [] : [];
   const memberCount = activeGuildId ? membersByGuild[activeGuildId]?.length ?? 0 : 0;
@@ -638,9 +655,11 @@ export function ChatView() {
   }
 
   const headerLabel = isDm
-    ? dmRecipient
-      ? displayName(dmRecipient)
-      : channel.name || "Direct message"
+    ? isGroupDm
+      ? dmOthers.map((u) => displayName(u)).join(", ") || "Group DM"
+      : dmRecipient
+        ? displayName(dmRecipient)
+        : channel.name || "Direct message"
     : channel.name ?? "channel";
 
   const rendered: ReactNode[] = [];
@@ -690,6 +709,16 @@ export function ChatView() {
           </>
         )}
         <div className="ml-auto flex items-center gap-1">
+          {isGroupDm && channel && (
+            <>
+              <IconButton title="Add people" onClick={() => setGroupDmOpen(true)}>
+                <UserPlus size={17} aria-hidden />
+              </IconButton>
+              <IconButton title="Leave group DM" onClick={() => void leaveGroupDm()}>
+                <LogOut size={17} aria-hidden />
+              </IconButton>
+            </>
+          )}
           {!isDm && memberCount > 0 && <span className="mr-1 hidden text-xs text-slate-500 sm:inline">{memberCount} members</span>}
           {!isDm && (
             <>
@@ -723,6 +752,10 @@ export function ChatView() {
           )}
         </div>
       </header>
+
+      {isGroupDm && channel && groupDmOpen && (
+        <GroupDmModal mode="add" channel={channel} onClose={() => setGroupDmOpen(false)} />
+      )}
 
       {invite && (
         <div className="flex items-center gap-2 border-b border-nebula-800 bg-nebula-900/60 px-4 py-2 text-xs text-slate-300">

@@ -1,5 +1,5 @@
 import type { Message, ReadState, VoiceState } from "@nebula/shared";
-import type { AppState } from "./store";
+import { navigateTo, type AppState } from "./store";
 import { getSocket } from "./lib/socket";
 
 type Setter = (
@@ -143,7 +143,12 @@ export function applyRealtime(set: Setter, get: () => AppState): void {
     const gid = get().activeGuildId;
     if (gid) void get().loadRoles(gid);
   });
-  socket.on("CHANNEL_CREATE", () => {
+  socket.on("CHANNEL_CREATE", (payload?: { guildId?: string | null }) => {
+    // DM / group DM channels carry no guild: refresh the DM sidebar.
+    if (payload && payload.guildId === null) {
+      void get().loadDms();
+      return;
+    }
     const gid = get().activeGuildId;
     if (!gid) return;
     // Refresh the sidebar; do NOT re-select the first channel (that would yank
@@ -152,11 +157,25 @@ export function applyRealtime(set: Setter, get: () => AppState): void {
     const active = get().activeChannelId;
     if (active) void get().loadThreads(active);
   });
-  socket.on("CHANNEL_UPDATE", () => {
+  socket.on("CHANNEL_UPDATE", (payload?: { guildId?: string | null }) => {
+    // A group DM's participant list changed: refresh the DM sidebar.
+    if (payload && payload.guildId === null) {
+      void get().loadDms();
+      return;
+    }
     const gid = get().activeGuildId;
     if (gid) void get().loadChannels(gid);
   });
-  socket.on("CHANNEL_DELETE", () => {
+  socket.on("CHANNEL_DELETE", (payload?: { id?: string; guildId?: string | null }) => {
+    // A group DM closed (or we were removed from it).
+    if (payload && payload.guildId === null && payload.id) {
+      void get().loadDms();
+      if (get().activeDmId === payload.id) {
+        void get().selectDm(null);
+        navigateTo("/channels/@me");
+      }
+      return;
+    }
     const gid = get().activeGuildId;
     if (gid) void get().loadChannels(gid);
     if (!get().activeChannelId) return;

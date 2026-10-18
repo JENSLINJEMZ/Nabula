@@ -62,6 +62,11 @@ export function setRouterNavigator(fn: ((path: string) => void) | null): void {
   navTo = fn;
 }
 
+/** Imperative navigation through the router bridge (no-op before the router mounts). */
+export function navigateTo(path: string): void {
+  navTo?.(path);
+}
+
 export interface Overwrite {
   targetId: string;
   type: 0 | 1;
@@ -178,6 +183,8 @@ export interface AppState {
   selectDm: (channelId: string | null, opts?: { silent?: boolean }) => Promise<void>;
   openDm: (userId: string) => Promise<void>;
   createGroupDm: (userIds: string[]) => Promise<void>;
+  addDmRecipient: (channelId: string, userId: string) => Promise<void>;
+  removeDmRecipient: (channelId: string, userId: string) => Promise<void>;
   loadRelationships: () => Promise<void>;
   searchUsers: (q: string) => Promise<PublicUser[]>;
   sendFriendRequest: (userId: string) => Promise<void>;
@@ -604,6 +611,14 @@ export const useApp = create<AppState>()((set, get) => {
         if (!opts?.silent) navTo?.(`/channels/@me/${channelId}`);
         await get().loadMessages(channelId);
         void get().ackChannel(channelId);
+      } else {
+        // Leaving the DM view: forget the deep-link target so `/` and refreshes
+        // don't bounce back to a DM that may have been left or closed.
+        try {
+          localStorage.removeItem(LAST_DM_KEY);
+        } catch {
+          /* storage unavailable */
+        }
       }
     },
 
@@ -658,6 +673,31 @@ export const useApp = create<AppState>()((set, get) => {
       if (!res) return;
       await get().loadDms();
       await get().selectDm(res.channel.id);
+    },
+
+    async addDmRecipient(channelId, userId) {
+      const res = await run(async () =>
+        apiPost<{ channel: Channel }>(`/api/channels/${channelId}/recipients`, { userId }),
+      );
+      if (!res) return;
+      await get().loadDms();
+    },
+
+    async removeDmRecipient(channelId, userId) {
+      const me = get().me;
+      const res = await run(async () =>
+        apiDelete<{ channel?: Channel | null; deleted?: boolean }>(
+          `/api/channels/${channelId}/recipients/${userId}`,
+        ),
+      );
+      if (!res) return;
+      await get().loadDms();
+      // Leaving (or being removed) while viewing this DM — or the group closing
+      // because too few participants remain — sends the user back home.
+      if (get().activeDmId === channelId && (userId === me?.id || res.deleted)) {
+        await get().selectDm(null);
+        navTo?.("/channels/@me");
+      }
     },
 
     async loadRelationships() {
