@@ -33,7 +33,7 @@
 | Server integration (security) | `apps/server/test/security.test.ts` | 14 | **14/14 pass** |
 | Server integration (threads) | `apps/server/test/threads.test.ts` | 4 | **4/4 pass** |
 | Server integration (group DMs) | `apps/server/test/group-dms.test.ts` | 8 | **8/8 pass** |
-| Browser end-to-end (Playwright, real Chromium) | `apps/web/e2e/*.spec.ts` | 17 | **17/17 pass** (+2 auth-setup) |
+| Browser end-to-end (Playwright, real Chromium) | `apps/web/e2e/*.spec.ts` | 20 | **20/20 pass** (18 specs + 2 auth-setup) |
 | **Total** | | **76** | **76/76 pass** |
 
 Commands:
@@ -127,8 +127,8 @@ The following are deliberately absent. Where the backend endpoint exists but has
 | Email verification / password reset | Out of scope (no SMTP); returns `MAIL_NOT_CONFIGURED`, never simulated. |
 | Real 2FA enrollment | Not built — `mfaEnabled` is always `false` (no enrollment flow). |
 | Light theme | Not built — the field exists but only the dark theme is styled. |
-| Message forwarding | Not built. |
-| System messages (join/pin/rename/call) | Not built (only `DEFAULT`, `REPLY`, `THREAD_STARTER_MESSAGE`). |
+| Message forwarding | Built. POST /api/messages/:id/forward copies message (attachments re-stored) to up to 10 targets with forward reference; e2e + 9 integration tests. |
+| System messages (join/pin/rename/call) | Built. PINNED_MESSAGE, RECIPIENT_ADD, RECIPIENT_REMOVE persisted; non-editable and excluded from search. |
 | Announcement/forum/stage channel **creation UI** | Not built (server accepts the types; UI creates text/voice only). |
 | Channel drag-reorder | Not built. |
 | Thumbnails / thumbhash | Not built. |

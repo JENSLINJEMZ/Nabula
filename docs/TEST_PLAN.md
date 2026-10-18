@@ -324,9 +324,10 @@ S1/S2 block a milestone exit. S3/S4 are tracked but may ship with a documented l
 | Server integration — journeys | `apps/server/test/journeys.test.ts` | 13 | **13/13 pass** |
 | Server integration — security | `apps/server/test/security.test.ts` | 14 | **14/14 pass** |
 | Server integration — threads | `apps/server/test/threads.test.ts` | 4 | **4/4 pass** |
+| Server integration — forwarding | `apps/server/test/forwarding.test.ts` | 9 | **9/9 pass** | authorization, blocks, slowmode, self-forward, DM targets | See §9.3 |
 | Server integration — group DMs | `apps/server/test/group-dms.test.ts` | 8 | **8/8 pass** |
-| Browser end-to-end | `apps/web/e2e/*.spec.ts` | 17 | **17/17 pass** (+2 auth-setup) |
-| **Total** | | **76** | **76/76 pass** |
+| Browser end-to-end | `apps/web/e2e/*.spec.ts` | 20 | **20/20 pass** (18 specs + 2 auth-setup) |
+| **Total** | | **88** | **88/88 pass** |
 
 Static gates (also executed): `npm run typecheck` (3 workspaces clean) and `npm run build` (production bundle produced).
 

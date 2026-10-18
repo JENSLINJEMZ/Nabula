@@ -20,7 +20,7 @@
 | `Out of scope` | Excluded on purpose and documented. |
 | `n/a` | Not applicable to that column. |
 
-**Verification totals:** 76 automated tests pass — 18 shared unit, 39 server integration, 17 browser e2e (+2 browser auth-setup tests). All 12 required journeys pass integration-side; 5 also pass in-browser.
+**Verification totals:** 88 automated tests pass — 18 shared unit, 48 server integration, 20 browser e2e specs (including 2 auth-setup tests). All 12 required journeys pass integration-side; 5 also pass in-browser.
 
 ---
 
@@ -101,8 +101,8 @@
 | Mention parsing (`<@>`,`<@&>`,`<#>`,`@everyone/here`) | Messaging | Permissions | Verified | Verified | Verified (unit + integration) | `@everyone/here` gated |
 | Markdown subset + sanitisation | Messaging | — | Verified | Verified | Verified (e2e) | Safe renderer; no raw HTML |
 | Message search (guild/DMs) | Search | Postgres | Verified | Verified | Verified (security scope + e2e) | Access-scoped; index not tuned |
-| Message forwarding (snapshot) | Messaging | Messaging | Not built | Not built | n/a | — |
-| System messages (join/pin/rename/call) | Messaging | Messaging | Not built | Not built | n/a | Only DEFAULT/REPLY/THREAD_STARTER exist |
+| Message forwarding (snapshot) | Messaging | Messaging | Verified | Verified | Verified (integration + e2e) | Copies to up to 10 targets; forward reference (cross-channel) |
+| System messages (join/pin/rename/call) | Messaging | Messaging | Verified | Verified | Verified (integration + codepaths) | PINNED_MESSAGE, RECIPIENT_ADD, RECIPIENT_REMOVE created server-side |
 | Message grouping + jump-to-message | Messaging UI | Web | Verified | Verified | Verified (e2e) | Client-side grouping + day dividers |
 | Message nonce dedup | Messaging | Messaging | Verified | n/a | Unverified | Idempotent send |
 | Upload endpoint (multipart) | Media | Storage | Verified | Verified | Verified (integration J10 + e2e) | ≤25 MiB default |
@@ -180,7 +180,7 @@ Foundation (monorepo, config, IDs, errors, DB/Redis, logging)
 
 - **Verified end-to-end (server + browser):** auth/sessions, permissions, guilds/roles/channels/overwrites, text messaging (send/edit/delete/reply/react/pin/typing/search/markdown/mentions), friends/blocks, DMs, **group DMs with participant management**, **threads**, **client-side routing (deep links/history/404)**, media upload + authorized access, moderation, realtime, and **audio** voice.
 - **Backend exists, no UI (labelled "Verified (routes) / Not built"):** slash commands, webhooks, message purge, avatar/icon upload.
-- **Not built:** camera video, screen share, server mute/deafen/move UI, change password, account delete, message forwarding, system messages, channel reorder, thumbnails, per-channel notification overrides, OS notifications, light theme, 2FA enrollment, CI config, production containers, load tests.
+- **Not built:** camera video, screen share, server mute/deafen/move UI, change password, account delete,  channel reorder, thumbnails, per-channel notification overrides, OS notifications, light theme, 2FA enrollment, CI config, production containers, load tests.
 - **Blocked:** TURN (cross-NAT voice); mail infra (verification/reset); multi-node realtime (Redis adapter); TLS termination.
 - **Out of scope (documented):** voice E2E encryption, SFU, push, auto-mod, raid detection, third-party bots/OAuth2, email verification/reset.
 

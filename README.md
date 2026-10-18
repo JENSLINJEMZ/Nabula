@@ -11,10 +11,10 @@ Nebula is a working full-stack application, verified by automated tests. The hon
 | Check | Result |
 | --- | --- |
 | Typecheck (3 workspaces) | clean |
-| Unit + integration tests | 57/57 pass (18 unit + 39 integration) |
-| Browser e2e (Playwright) | 17/17 pass (+2 auth setup) |
+| Unit + integration tests | 66/66 pass (18 unit + 48 integration) |
+| Browser e2e (Playwright) | 20/20 pass (18 specs + 2 auth setup tests) |
 | Production build | pass |
-| Required journeys (12) verified server-side | 12/12 (7 also in-browser) |
+| Required journeys (12) verified server-side | 12/12 (7+ also in-browser; forwarding/journeys extended) |
 
 ## Stack
 
