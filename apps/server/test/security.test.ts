@@ -314,7 +314,11 @@ describe("security", () => {
     const bobUsername = await getLoginIdentifier(bobId);
     expect(bobUsername).toBeTruthy();
 
-    const prefix = bobUsername!.slice(0, 7);
+    // Search by a prefix of bob's unique username. The integration database is
+    // shared across runs and accumulates seeded users, so use most of the
+    // username (still a prefix match) to keep the assertion deterministic even
+    // when many historical `bob_*` accounts exist.
+    const prefix = bobUsername!.slice(0, -1);
     const res = await alice.get<{ users: Array<Record<string, unknown>> }>(
       `/api/users/search?q=${encodeURIComponent(prefix)}`,
     );

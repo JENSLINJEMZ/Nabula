@@ -5,7 +5,7 @@ import { env } from "../config.js";
 import { logger } from "../logger.js";
 import { SESSION_COOKIE, resolveSession } from "../auth/sessions.js";
 import { pool, query } from "../db/pool.js";
-import { listDmChannels, listGuildChannelsForUser } from "../domain/channels.js";
+import { filterAccessibleThreads, listDmChannels, listGuildChannelsForUser } from "../domain/channels.js";
 import { getNotificationSettings } from "../domain/notifications.js";
 import { getSelfUser, getUserPresence, setPresence } from "../domain/users.js";
 import { listGuildsForUser } from "../domain/guilds.js";
@@ -42,7 +42,7 @@ async function computeAccessibleChannels(userId: string): Promise<{ channelIds: 
 
   for (const guild of guilds) {
     try {
-      const channels = await listGuildChannelsForUser(guild.id, userId);
+      const channels = await filterAccessibleThreads(userId, await listGuildChannelsForUser(guild.id, userId));
       for (const channel of channels) channelIds.push(channel.id);
     } catch (error) {
       logger.warn("failed to compute guild channels for subscription", {
@@ -246,7 +246,7 @@ export function attachGateway(httpServer: HttpServer): Server {
           userId,
         ]);
         if (member.length === 0) throw Errors.NOT_GUILD_MEMBER();
-        const channels = await listGuildChannelsForUser(guildId, userId);
+        const channels = await filterAccessibleThreads(userId, await listGuildChannelsForUser(guildId, userId));
         await socket.join(rooms.guild(guildId));
         data.guildIds.add(guildId);
         for (const channel of channels) {

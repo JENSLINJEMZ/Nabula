@@ -18,6 +18,10 @@ function NavigationBridge() {
   pathRef.current = location.pathname;
   useEffect(() => {
     setRouterNavigator((path) => {
+      // Skip navigation when the target equals the current path so repeated
+      // store-driven calls don't push duplicate history entries (which breaks
+      // Back/Forward). The URL is the source of truth; useRouteSync syncs
+      // state to it without ever navigating back (silent), preventing loops.
       if (path === pathRef.current) return;
       navigate(path);
     });
@@ -26,7 +30,7 @@ function NavigationBridge() {
   return null;
 }
 
-type RouteTarget = { home?: boolean; guildId?: string; channelId?: string; dmId?: string };
+type RouteTarget = { home?: boolean; guildId?: string; channelId?: string; dmId?: string; threadId?: string };
 
 /**
  * URL is the single source of truth for the active location. On every URL
@@ -35,7 +39,7 @@ type RouteTarget = { home?: boolean; guildId?: string; channelId?: string; dmId?
  * actions do not re-trigger this effect (which would create a feedback loop).
  */
 function useRouteSync(target: RouteTarget) {
-  const { home, guildId, channelId, dmId } = target;
+  const { home, guildId, channelId, dmId, threadId } = target;
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -43,29 +47,35 @@ function useRouteSync(target: RouteTarget) {
       const state = useApp.getState();
       try {
         if (home) {
-          if (state.activeGuildId || state.activeChannelId || state.activeDmId) await state.selectGuild(null);
+          if (state.activeGuildId || state.activeChannelId || state.activeDmId)
+            await state.selectGuild(null, { silent: true });
           return;
         }
         if (dmId) {
-          if (state.activeDmId !== dmId) await state.selectDm(dmId);
+          if (state.activeDmId !== dmId) await state.selectDm(dmId, { silent: true });
           return;
         }
         if (guildId && channelId) {
-          const fresh = useApp.getState();
-          if (fresh.activeGuildId !== guildId) await fresh.selectGuild(guildId, { channelId });
-          else if (fresh.activeChannelId !== channelId) await fresh.selectChannel(channelId);
+          let fresh = useApp.getState();
+          if (fresh.activeGuildId !== guildId) await fresh.selectGuild(guildId, { channelId, silent: true });
+          fresh = useApp.getState();
+          if (fresh.activeChannelId !== channelId) await fresh.selectChannel(channelId, { silent: true });
+          if (threadId) {
+            fresh = useApp.getState();
+            if (fresh.activeThreadId !== threadId) await fresh.openThread(threadId, { silent: true });
+          }
           return;
         }
         if (guildId) {
           const fresh = useApp.getState();
-          if (fresh.activeGuildId !== guildId) await fresh.selectGuild(guildId);
+          if (fresh.activeGuildId !== guildId) await fresh.selectGuild(guildId, { silent: true });
         }
       } catch {
         // Deep link to a guild/channel/DM the user can't access: send them home.
         navigate("/channels/@me", { replace: true });
       }
     })();
-  }, [home, guildId, channelId, dmId, navigate]);
+  }, [home, guildId, channelId, dmId, threadId, navigate]);
 }
 
 function HomeRoute() {
@@ -82,6 +92,12 @@ function DmRoute() {
 function GuildChannelRoute() {
   const { guildId, channelId } = useParams<{ guildId: string; channelId: string }>();
   useRouteSync({ guildId, channelId });
+  return <ChatShell />;
+}
+
+function ThreadRoute() {
+  const { guildId, channelId, threadId } = useParams<{ guildId: string; channelId: string; threadId: string }>();
+  useRouteSync({ guildId, channelId, threadId });
   return <ChatShell />;
 }
 
@@ -137,6 +153,7 @@ export function AppRoutes() {
         <Route path="/" element={<LastViewRedirect />} />
         <Route path="/channels/@me" element={<HomeRoute />} />
         <Route path="/channels/@me/:dmId" element={<DmRoute />} />
+        <Route path="/channels/:guildId/:channelId/threads/:threadId" element={<ThreadRoute />} />
         <Route path="/channels/:guildId/:channelId" element={<GuildChannelRoute />} />
         <Route path="/channels/:guildId" element={<GuildRoute />} />
         <Route path="*" element={<NotFound />} />

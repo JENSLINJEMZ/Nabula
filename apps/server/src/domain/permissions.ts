@@ -114,15 +114,31 @@ interface ChannelRow {
   guild_id: string | null;
   type: number;
   parent_id: string | null;
+  owner_id: string | null;
 }
 
 async function getChannelRow(channelId: string): Promise<ChannelRow> {
   const row = await queryOne<ChannelRow>(
-    `SELECT id, guild_id, type, parent_id FROM channels WHERE id = $1`,
+    `SELECT id, guild_id, type, parent_id, owner_id FROM channels WHERE id = $1`,
     [channelId],
   );
   if (!row) throw Errors.UNKNOWN_CHANNEL();
   return row;
+}
+
+/**
+ * Private threads are visible only to their members (and their owner). Thread
+ * membership is stored in `thread_members`; the parent channel's VIEW_CHANNEL
+ * permission alone is not sufficient.
+ */
+async function assertThreadMembership(channel: ChannelRow, userId: string): Promise<void> {
+  if (channel.type !== ChannelType.PRIVATE_THREAD) return;
+  if (channel.owner_id === userId) return;
+  const member = await queryOne(`SELECT 1 AS ok FROM thread_members WHERE thread_id = $1 AND user_id = $2`, [
+    channel.id,
+    userId,
+  ]);
+  if (!member) throw Errors.CHANNEL_NOT_ACCESSIBLE({ channelId: channel.id });
 }
 
 async function loadOverwrites(channelId: string): Promise<PermissionOverwrite[]> {
@@ -217,6 +233,9 @@ export async function assertChannelAccess(
 
   const ctx = await loadMemberContext(channel.guild_id, userId);
   const permissions = await computeChannelPermissionsForMember(channel, ctx);
+
+  // Private threads additionally require thread membership (or ownership).
+  await assertThreadMembership(channel, userId);
 
   if (permission !== 0n && (permissions & permission) !== permission) {
     throw Errors.CHANNEL_NOT_ACCESSIBLE({ channelId, permission: permission.toString() });

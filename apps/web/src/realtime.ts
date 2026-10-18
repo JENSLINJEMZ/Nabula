@@ -145,7 +145,12 @@ export function applyRealtime(set: Setter, get: () => AppState): void {
   });
   socket.on("CHANNEL_CREATE", () => {
     const gid = get().activeGuildId;
-    if (gid) void get().selectGuild(gid);
+    if (!gid) return;
+    // Refresh the sidebar; do NOT re-select the first channel (that would yank
+    // the user out of the channel they are viewing when a thread is created).
+    void get().loadChannels(gid);
+    const active = get().activeChannelId;
+    if (active) void get().loadThreads(active);
   });
   socket.on("CHANNEL_UPDATE", () => {
     const gid = get().activeGuildId;

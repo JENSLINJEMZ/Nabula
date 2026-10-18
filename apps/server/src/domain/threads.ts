@@ -64,9 +64,9 @@ export async function createThread(parentChannelId: string, creatorId: string, i
   const row = await queryOne<ChannelRowFull>(
     `INSERT INTO channels (id, guild_id, type, name, position, parent_id, owner_id,
                            thread_archive_timestamp, default_auto_archive_duration)
-     VALUES ($1, $2, $3, $4, 0, $5, $6, now() + ($7 || ' minutes')::interval, $7)
+     VALUES ($1, $2, $3, $4, 0, $5, $6, now() + ($7::int * interval '1 minute'), $7::int)
      RETURNING ${CHANNEL_COLUMNS}`,
-    [id, parent.guild_id, threadType, name, parentChannelId, creatorId, String(autoArchive)],
+    [id, parent.guild_id, threadType, name, parentChannelId, creatorId, autoArchive],
   );
   if (!row) throw Errors.INTERNAL(undefined, "Failed to create thread");
 
@@ -87,6 +87,15 @@ export async function createThread(parentChannelId: string, creatorId: string, i
       `UPDATE messages SET flags = flags | 32, reference_channel_id = $2, type = 21 WHERE id = $1`,
       [input.messageId, id],
     );
+    // Mirror the promoted thread-starter message to the parent channel so
+    // clients render the "Thread" affordance without a reload. Dynamic import
+    // avoids a static cycle (messages.ts -> channels.ts -> threads.ts).
+    const { assembleMessages, getMessageRow } = await import("./messages.js");
+    const starterRow = await getMessageRow(input.messageId);
+    if (starterRow) {
+      const assembled = (await assembleMessages(creatorId, [starterRow]))[0];
+      if (assembled) bus().toChannel(parentChannelId, ServerEvents.MESSAGE_UPDATE, assembled);
+    }
   }
 
   await writeAuditLog({

@@ -85,6 +85,10 @@ export interface AppState {
   dms: Channel[];
   activeDmId: string | null;
 
+  activeThreadId: string | null;
+  threadsByChannel: Record<string, Channel[]>;
+  threadDrafts: Record<string, string>;
+
   messagesByChannel: Record<string, Message[]>;
   pinnedByChannel: Record<string, Message[]>;
   relationships: Relationship[];
@@ -128,9 +132,14 @@ export interface AppState {
   dismissToast: () => void;
 
   loadGuilds: () => Promise<void>;
-  selectGuild: (guildId: string | null, opts?: { channelId?: string }) => Promise<void>;
+  selectGuild: (guildId: string | null, opts?: { channelId?: string; silent?: boolean }) => Promise<void>;
   loadChannels: (guildId: string) => Promise<void>;
-  selectChannel: (channelId: string | null) => Promise<void>;
+  selectChannel: (channelId: string | null, opts?: { silent?: boolean }) => Promise<void>;
+  loadThreads: (channelId: string) => Promise<void>;
+  openThread: (threadId: string, opts?: { silent?: boolean }) => Promise<void>;
+  closeThread: () => void;
+  setThreadDraft: (threadId: string, draft: string) => void;
+  createThread: (channelId: string, name: string, messageId?: string) => Promise<void>;
   createGuild: (name: string) => Promise<void>;
   updateGuild: (guildId: string, patch: { name?: string; description?: string | null }) => Promise<void>;
   deleteGuild: (guildId: string) => Promise<void>;
@@ -166,7 +175,7 @@ export interface AppState {
   loadAuditLog: (guildId: string) => Promise<AuditLogEntry[]>;
 
   loadDms: () => Promise<void>;
-  selectDm: (channelId: string | null) => Promise<void>;
+  selectDm: (channelId: string | null, opts?: { silent?: boolean }) => Promise<void>;
   openDm: (userId: string) => Promise<void>;
   createGroupDm: (userIds: string[]) => Promise<void>;
   loadRelationships: () => Promise<void>;
@@ -249,6 +258,9 @@ export const useApp = create<AppState>()((set, get) => {
     activeChannelId: null,
     dms: [],
     activeDmId: null,
+    activeThreadId: null,
+    threadsByChannel: {},
+    threadDrafts: {},
     messagesByChannel: {},
     pinnedByChannel: {},
     relationships: [],
@@ -329,6 +341,9 @@ export const useApp = create<AppState>()((set, get) => {
           activeGuildId: null,
           activeChannelId: null,
           activeDmId: null,
+          activeThreadId: null,
+          threadsByChannel: {},
+          threadDrafts: {},
           ready: false,
         });
         navTo?.("/");
@@ -351,7 +366,7 @@ export const useApp = create<AppState>()((set, get) => {
     },
 
     async selectGuild(guildId, opts) {
-      set({ activeGuildId: guildId, activeChannelId: null, activeDmId: null });
+      set({ activeGuildId: guildId, activeChannelId: null, activeDmId: null, activeThreadId: null });
       try {
         if (guildId) localStorage.setItem(LAST_GUILD_KEY, guildId);
         else localStorage.removeItem(LAST_GUILD_KEY);
@@ -359,7 +374,7 @@ export const useApp = create<AppState>()((set, get) => {
         /* storage unavailable */
       }
       if (!guildId) {
-        navTo?.("/channels/@me");
+        if (!opts?.silent) navTo?.("/channels/@me");
         return;
       }
       await Promise.all([get().loadChannels(guildId), get().loadRoles(guildId), get().loadMembers(guildId)]);
@@ -376,7 +391,7 @@ export const useApp = create<AppState>()((set, get) => {
       const target =
         (opts?.channelId ? channels.find((c) => c.id === opts.channelId) : undefined) ??
         channels.find((c) => c.type === 0);
-      if (target) await get().selectChannel(target.id);
+      if (target) await get().selectChannel(target.id, { silent: opts?.silent });
     },
 
     async loadChannels(guildId) {
@@ -384,8 +399,8 @@ export const useApp = create<AppState>()((set, get) => {
       set((s) => ({ channelsByGuild: { ...s.channelsByGuild, [guildId]: res.channels } }));
     },
 
-    async selectChannel(channelId) {
-      set({ activeChannelId: channelId, activeDmId: null, pinnedOpen: false });
+    async selectChannel(channelId, opts) {
+      set({ activeChannelId: channelId, activeDmId: null, activeThreadId: null, pinnedOpen: false });
       if (channelId) {
         try {
           localStorage.setItem(LAST_CHANNEL_KEY, channelId);
@@ -393,8 +408,9 @@ export const useApp = create<AppState>()((set, get) => {
           /* storage unavailable */
         }
         const guildId = get().activeGuildId;
-        if (guildId) navTo?.(`/channels/${guildId}/${channelId}`);
+        if (!opts?.silent && guildId) navTo?.(`/channels/${guildId}/${channelId}`);
         await get().loadMessages(channelId);
+        void get().loadThreads(channelId);
         void get().ackChannel(channelId);
       }
     },
@@ -577,18 +593,53 @@ export const useApp = create<AppState>()((set, get) => {
       set({ dms: res.channels });
     },
 
-    async selectDm(channelId) {
-      set({ activeGuildId: null, activeChannelId: null, activeDmId: channelId, pinnedOpen: false });
+    async selectDm(channelId, opts) {
+      set({ activeGuildId: null, activeChannelId: null, activeDmId: channelId, activeThreadId: null, pinnedOpen: false });
       if (channelId) {
         try {
           localStorage.setItem(LAST_DM_KEY, channelId);
         } catch {
           /* storage unavailable */
         }
-        navTo?.(`/channels/@me/${channelId}`);
+        if (!opts?.silent) navTo?.(`/channels/@me/${channelId}`);
         await get().loadMessages(channelId);
         void get().ackChannel(channelId);
       }
+    },
+
+    async loadThreads(channelId) {
+      const res = await run(async () => apiGet<{ threads: Channel[] }>(`/api/channels/${channelId}/threads`));
+      if (!res) return;
+      set((s) => ({ threadsByChannel: { ...s.threadsByChannel, [channelId]: res.threads } }));
+    },
+
+    async openThread(threadId, opts) {
+      const parent = get().activeChannelId;
+      const guildId = get().activeGuildId;
+      set({ activeThreadId: threadId, pinnedOpen: false });
+      await get().loadMessages(threadId);
+      void get().ackChannel(threadId);
+      if (!opts?.silent && guildId && parent) navTo?.(`/channels/${guildId}/${parent}/threads/${threadId}`);
+    },
+
+    closeThread() {
+      const parent = get().activeChannelId;
+      const guildId = get().activeGuildId;
+      set({ activeThreadId: null });
+      if (guildId && parent) navTo?.(`/channels/${guildId}/${parent}`);
+    },
+
+    setThreadDraft(threadId, draft) {
+      set((s) => ({ threadDrafts: { ...s.threadDrafts, [threadId]: draft } }));
+    },
+
+    async createThread(channelId, name, messageId) {
+      const res = await run(async () =>
+        apiPost<{ thread: Channel }>(`/api/channels/${channelId}/threads`, { name, messageId: messageId ?? null }),
+      );
+      if (!res) return;
+      await get().loadThreads(channelId);
+      await get().openThread(res.thread.id);
     },
 
     async openDm(userId) {

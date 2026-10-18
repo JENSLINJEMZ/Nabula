@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEven
 import {
   Bell,
   Hash,
+  MessageSquarePlus,
+  MessagesSquare,
   Paperclip,
   Pencil,
   Pin,
@@ -111,16 +113,20 @@ function MessageRow({
   isMine,
   highlight,
   onReply,
+  onThread,
   deps,
   canManage,
+  canThread,
 }: {
   message: Message;
   grouped: boolean;
   isMine: boolean;
   highlight?: boolean;
   onReply: (m: Message) => void;
+  onThread: (m: Message) => void;
   deps: { mentions: PublicUser[]; channels: Map<string, string>; roles: Map<string, { name: string; color: number }>; selfId: string | null };
   canManage: boolean;
+  canThread: boolean;
 }) {
   const editMessage = useApp((s) => s.editMessage);
   const deleteMessage = useApp((s) => s.deleteMessage);
@@ -248,6 +254,17 @@ function MessageRow({
               ))}
             </div>
           )}
+
+          {message.threadId && (
+            <button
+              type="button"
+              onClick={() => onThread(message)}
+              className="mt-1.5 flex items-center gap-1.5 rounded-md border border-nebula-700 bg-nebula-850 px-2 py-0.5 text-xs font-medium text-nebula-accent hover:border-nebula-accent/60"
+            >
+              <MessagesSquare size={13} aria-hidden />
+              Thread
+            </button>
+          )}
         </div>
       </div>
 
@@ -258,6 +275,11 @@ function MessageRow({
         <IconButton title="Reply" onClick={() => onReply(message)}>
           <Reply size={15} aria-hidden />
         </IconButton>
+        {canThread && (
+          <IconButton title={message.threadId ? "Open thread" : "Create thread"} onClick={() => onThread(message)}>
+            <MessageSquarePlus size={15} aria-hidden />
+          </IconButton>
+        )}
         <IconButton
           title={message.pinned ? "Unpin" : "Pin"}
           onClick={() => void (message.pinned ? unpinMessage(message.id) : pinMessage(message.id))}
@@ -316,6 +338,167 @@ function MessageRow({
   );
 }
 
+/* ---------------------------------------------------------- thread panel */
+
+/**
+ * Side panel that renders a thread's messages and composer. A thread is itself
+ * a channel (server-side type 11/12), so messages are fetched/sent with the
+ * thread's channel id and arrive over the normal realtime path.
+ */
+function ThreadPanel() {
+  const activeThreadId = useApp((s) => s.activeThreadId);
+  const activeChannelId = useApp((s) => s.activeChannelId);
+  const activeGuildId = useApp((s) => s.activeGuildId);
+  const threads = useApp((s) => (activeChannelId ? s.threadsByChannel[activeChannelId] : undefined));
+  const messagesByChannel = useApp((s) => s.messagesByChannel);
+  const channelsByGuild = useApp((s) => s.channelsByGuild);
+  const rolesByGuild = useApp((s) => s.rolesByGuild);
+  const permissionsByGuild = useApp((s) => s.permissionsByGuild);
+  const ownerByGuild = useApp((s) => s.ownerByGuild);
+  const me = useApp((s) => s.me);
+  const sendMessage = useApp((s) => s.sendMessage);
+  const closeThread = useApp((s) => s.closeThread);
+  const threadDrafts = useApp((s) => s.threadDrafts);
+  const setThreadDraft = useApp((s) => s.setThreadDraft);
+
+  // Draft lives in the store (keyed by thread id) so it survives the
+  // component remount triggered by the route change when a thread opens.
+  const draft = activeThreadId ? (threadDrafts[activeThreadId] ?? "") : "";
+  const setDraft = (value: string) => {
+    if (activeThreadId) setThreadDraft(activeThreadId, value);
+  };
+  const [sending, setSending] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const thread = useMemo(() => (threads ?? []).find((t) => t.id === activeThreadId) ?? null, [threads, activeThreadId]);
+  const messages = activeThreadId ? messagesByChannel[activeThreadId] ?? [] : [];
+  const parent = activeChannelId && activeGuildId ? (channelsByGuild[activeGuildId] ?? []).find((c) => c.id === activeChannelId) ?? null : null;
+  const isOwner = activeGuildId ? ownerByGuild[activeGuildId] ?? false : false;
+  const canSend = isOwner || hasBits(parent?.permissions, Permissions.SEND_MESSAGES);
+  const canManage = isOwner || hasBits(activeGuildId ? permissionsByGuild[activeGuildId] : undefined, Permissions.MANAGE_MESSAGES);
+
+  const deps = useMemo(() => {
+    const channels = new Map<string, string>();
+    for (const list of Object.values(channelsByGuild)) for (const c of list) if (c.name) channels.set(c.id, c.name);
+    const roles = new Map<string, { name: string; color: number }>();
+    if (activeGuildId) for (const r of rolesByGuild[activeGuildId] ?? []) roles.set(r.id, { name: r.name, color: r.color });
+    return { channels, roles, selfId: me?.id ?? null };
+  }, [channelsByGuild, rolesByGuild, activeGuildId, me?.id]);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [messages.length, activeThreadId]);
+
+  if (!activeThreadId) return null;
+
+  /**
+   * Send a message in this thread. The content is passed in explicitly (read
+   * from the event) rather than read from `draft`, so a rapid fill-then-Enter
+   * cannot race the async state update and send an empty string.
+   */
+  async function send(content: string, event?: FormEvent) {
+    event?.preventDefault();
+    if (!activeThreadId || sending || !canSend) return;
+    const trimmed = content.trim();
+    if (!trimmed) return;
+    setSending(true);
+    try {
+      await sendMessage(activeThreadId, trimmed);
+      setDraft("");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  const rendered: ReactNode[] = [];
+  let prev: Message | null = null;
+  for (const m of messages) {
+    const grouped = prev ? isSameGroup(prev, m) : false;
+    rendered.push(
+      <MessageRow
+        key={m.id}
+        message={m}
+        grouped={grouped}
+        isMine={m.author.id === me?.id}
+        onReply={() => {}}
+        onThread={() => {}}
+        deps={{ mentions: m.mentions ?? [], ...deps }}
+        canManage={canManage}
+        canThread={false}
+      />,
+    );
+    prev = m;
+  }
+
+  return (
+    <aside
+      className="flex w-full max-w-md shrink-0 flex-col border-l border-nebula-800 bg-nebula-950 md:w-96"
+      aria-label="Thread"
+    >
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-nebula-800 px-3">
+        <MessagesSquare size={17} className="text-slate-500" aria-hidden />
+        <h3 className="truncate font-semibold text-slate-100">{thread?.name ?? "Thread"}</h3>
+        <button
+          type="button"
+          aria-label="Close thread"
+          className="ml-auto rounded p-1 text-slate-500 hover:bg-white/5 hover:text-slate-200"
+          onClick={() => closeThread()}
+        >
+          <X size={16} aria-hidden />
+        </button>
+      </header>
+
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto py-3">
+        {messages.length === 0 ? (
+          <div className="flex h-full items-center justify-center px-4 text-center text-sm text-slate-500">
+            This thread is empty — start the conversation.
+          </div>
+        ) : (
+          rendered
+        )}
+      </div>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void send(draft);
+        }}
+        className="shrink-0 px-3 pb-4 pt-1"
+      >
+        <div className="flex items-end gap-2 rounded-lg border border-nebula-700 bg-nebula-900 px-2 py-1.5 focus-within:border-nebula-accent">
+          <textarea
+            aria-label="Message thread"
+            className="max-h-40 min-h-[24px] flex-1 resize-none bg-transparent py-1 text-sm text-slate-100 placeholder-slate-500 outline-none disabled:opacity-50"
+            rows={1}
+            disabled={!canSend}
+            placeholder={canSend ? "Message thread" : "You cannot send messages here"}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                // Read the value directly from the event instead of the
+                // `draft` closure so a rapid fill-then-Enter can't race the
+                // async state update and send an empty string.
+                void send(e.currentTarget.value);
+              }
+            }}
+          />
+          <button
+            type="submit"
+            className="btn-primary px-2 py-1.5"
+            disabled={sending || !canSend || !draft.trim()}
+            aria-label="Send thread message"
+          >
+            <Send size={16} aria-hidden />
+          </button>
+        </div>
+      </form>
+    </aside>
+  );
+}
+
 /* ------------------------------------------------------------ chat view */
 
 export function ChatView() {
@@ -341,6 +524,9 @@ export function ChatView() {
   const setNotificationsOpen = useApp((s) => s.setNotificationsOpen);
   const loadOlder = useApp((s) => s.loadOlder);
   const unreadNotifications = useApp((s) => s.unreadNotifications);
+  const activeThreadId = useApp((s) => s.activeThreadId);
+  const createThread = useApp((s) => s.createThread);
+  const openThread = useApp((s) => s.openThread);
 
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState<{ id: string; filename: string }[]>([]);
@@ -375,6 +561,16 @@ export function ChatView() {
   const canAttach = isDm || isOwner || hasBits(channelPerms, Permissions.ATTACH_FILES);
   const canManageMessages = isOwner || hasBits(perms, Permissions.MANAGE_MESSAGES);
   const canInvite = isDm ? false : isOwner || hasBits(channelPerms, Permissions.CREATE_INSTANT_INVITE);
+  const canThread = isDm ? false : isOwner || hasBits(channelPerms, Permissions.CREATE_PUBLIC_THREADS);
+
+  async function onThread(message: Message) {
+    if (message.threadId) {
+      await openThread(message.threadId);
+      return;
+    }
+    const name = message.content.trim().slice(0, 40) || `${displayName(message.author)}'s thread`;
+    await createThread(message.channelId, name, message.id);
+  }
 
   const deps = useMemo(() => {
     const channels = new Map<string, string>();
@@ -389,19 +585,19 @@ export function ChatView() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages.length, conversationId]);
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
+  async function submit(content: string, event?: FormEvent) {
+    event?.preventDefault();
     if (!conversationId || sending || !canSend) return;
-    const content = draft.trim();
-    if (!content && pending.length === 0) return;
+    const trimmed = content.trim();
+    if (!trimmed && pending.length === 0) return;
     setSending(true);
     try {
       if (pending.length > 0) {
-        await sendWithAttachments(conversationId, content, pending.map((a) => a.id));
+        await sendWithAttachments(conversationId, trimmed, pending.map((a) => a.id));
       } else if (replyTarget) {
-        await sendReply(conversationId, content, replyTarget.id);
+        await sendReply(conversationId, trimmed, replyTarget.id);
       } else {
-        await sendMessage(conversationId, content);
+        await sendMessage(conversationId, trimmed);
       }
       setDraft("");
       setPending([]);
@@ -423,7 +619,7 @@ export function ChatView() {
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      void submit(e as unknown as FormEvent);
+      void submit(e.currentTarget.value);
       return;
     }
     const now = Date.now();
@@ -468,15 +664,18 @@ export function ChatView() {
         grouped={grouped}
         isMine={m.author.id === me?.id}
         onReply={setReplyTarget}
+        onThread={(msg) => void onThread(msg)}
         deps={{ mentions: m.mentions ?? [], ...deps }}
         canManage={canManageMessages}
+        canThread={canThread}
       />,
     );
     prev = m;
   }
 
   return (
-    <div className="flex min-w-0 flex-1 flex-col bg-nebula-950">
+    <div className="flex min-w-0 flex-1">
+      <div className="flex min-w-0 flex-1 flex-col bg-nebula-950">
       <header className="flex h-12 shrink-0 items-center gap-2 border-b border-nebula-800 px-4">
         {isDm ? (
           <Avatar user={dmRecipient} id={dmRecipient?.id ?? channel.id} name={headerLabel} size={24} />
@@ -559,7 +758,13 @@ export function ChatView() {
 
       <TypingLine channelId={conversationId} />
 
-      <form onSubmit={submit} className="shrink-0 px-4 pb-5 pt-1">
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          void submit(draft);
+        }}
+        className="shrink-0 px-4 pb-5 pt-1"
+      >
         {!canSend && (
           <p className="mb-2 rounded-md border border-nebula-700 bg-nebula-900 px-3 py-1.5 text-xs text-slate-400">
             You do not have permission to send messages in this channel.
@@ -622,6 +827,8 @@ export function ChatView() {
           </button>
         </div>
       </form>
+      </div>
+      {activeThreadId && <ThreadPanel />}
     </div>
   );
 }

@@ -157,6 +157,24 @@ export async function listGuildChannelsForUser(guildId: string, userId: string):
   return computeChannelsWithPermissions(ctx, channels);
 }
 
+/**
+ * Drop private threads the user cannot see (not a member, not the owner). Used
+ * by the realtime gateway so that channel-room fan-out never reaches users who
+ * lack access to a private thread.
+ */
+export async function filterAccessibleThreads(userId: string, channels: WireChannel[]): Promise<WireChannel[]> {
+  const privateThreads = channels.filter((c) => c.type === ChannelType.PRIVATE_THREAD);
+  if (privateThreads.length === 0) return channels;
+  const rows = await query<{ thread_id: string }>(
+    `SELECT thread_id FROM thread_members WHERE user_id = $1 AND thread_id = ANY($2::bigint[])`,
+    [userId, privateThreads.map((c) => c.id)],
+  );
+  const memberOf = new Set(rows.map((r) => r.thread_id));
+  return channels.filter(
+    (c) => c.type !== ChannelType.PRIVATE_THREAD || memberOf.has(c.id) || c.ownerId === userId,
+  );
+}
+
 export async function listGuildChannels(guildId: string): Promise<ChannelRowFull[]> {
   return query<ChannelRowFull>(
     `SELECT ${CHANNEL_COLUMNS} FROM channels WHERE guild_id = $1 ORDER BY position ASC, id ASC`,
