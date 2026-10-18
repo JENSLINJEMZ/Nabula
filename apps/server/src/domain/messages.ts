@@ -8,6 +8,7 @@ import {
   ServerEvents,
   parseMentions,
   type Attachment as WireAttachment,
+  type Embed,
   type Message as WireMessage,
   type PublicUser,
   type Reaction,
@@ -50,13 +51,14 @@ export interface MessageRow {
   webhook_id: string | null;
   application_id: string | null;
   nonce: string | null;
+  embeds: unknown;
   edited_at: Date | null;
   created_at: Date;
 }
 
 const MESSAGE_COLUMNS = `id, channel_id, guild_id, author_id, content, tts, mention_everyone, mention_role_ids,
   flags, type, pinned, reference_message_id, reference_channel_id, reference_type, webhook_id, application_id,
-  nonce, edited_at, created_at`;
+  nonce, embeds, edited_at, created_at`;
 
 const DELETED_USER: PublicUser = {
   id: "0",
@@ -161,7 +163,7 @@ export async function assembleMessages(viewerId: string, rows: MessageRow[]): Pr
       flags: refRow.flags,
       attachments: attachmentsByMessage.get(refRow.id) ?? [],
       reactions: [],
-      embeds: [],
+      embeds: toEmbeds(refRow.embeds),
       referencedMessage: null,
       threadId: null,
       nonce: null,
@@ -198,7 +200,7 @@ export async function assembleMessages(viewerId: string, rows: MessageRow[]): Pr
       flags: row.flags,
       attachments: attachmentsByMessage.get(row.id) ?? [],
       reactions,
-      embeds: [],
+      embeds: toEmbeds(row.embeds),
       referencedMessage: row.reference_message_id
         ? referenceAssembled.get(row.reference_message_id) ?? null
         : null,
@@ -215,6 +217,12 @@ export async function assembleMessages(viewerId: string, rows: MessageRow[]): Pr
 async function fetchUserOrDeleted(id: string): Promise<PublicUser> {
   const row = await queryOne<UserRow>(`SELECT ${USER_COLUMNS} FROM users WHERE id = $1`, [id]);
   return row ? toPublicUser(row) : DELETED_USER;
+}
+
+/** Normalize a stored JSONB embeds value into the wire shape. */
+function toEmbeds(value: unknown): Embed[] {
+  if (!Array.isArray(value)) return [];
+  return value as Embed[];
 }
 
 export async function getMessageRow(messageId: string): Promise<MessageRow | null> {
@@ -275,6 +283,8 @@ export interface CreateMessageInput {
   attachmentIds?: string[];
   referenceMessageId?: string | null;
   flags?: number;
+  /** Structured self-embeds (webhook callers). Never fetched from the network. */
+  embeds?: Embed[];
   /** Set when the message is authored by a webhook rather than a user. */
   webhookId?: string | null;
 }
@@ -294,8 +304,9 @@ export async function createMessage(input: CreateMessageInput): Promise<WireMess
   const guildId = channel.guild_id;
 
   const attachmentIds = input.attachmentIds ?? [];
+  const embeds = input.embeds ?? [];
   const hasContent = content.trim().length > 0;
-  if (!hasContent && attachmentIds.length === 0) throw Errors.MESSAGE_EMPTY();
+  if (!hasContent && attachmentIds.length === 0 && embeds.length === 0) throw Errors.MESSAGE_EMPTY();
 
   let permissions = access.permissions;
 
@@ -370,8 +381,8 @@ export async function createMessage(input: CreateMessageInput): Promise<WireMess
     await tx.query(
       `INSERT INTO messages (id, channel_id, guild_id, author_id, content, tts, mention_everyone,
                              mention_role_ids, flags, type, reference_message_id, reference_channel_id,
-                             reference_type, webhook_id, nonce)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::bigint[], $9, $10, $11, $2, $12, $13, $14)`,
+                             reference_type, webhook_id, nonce, embeds)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::bigint[], $9, $10, $11, $2, $12, $13, $14, $15::jsonb)`,
       [
         messageId,
         input.channelId,
@@ -387,6 +398,7 @@ export async function createMessage(input: CreateMessageInput): Promise<WireMess
         referenceMessageId ? 0 : null,
         input.webhookId ?? null,
         input.nonce ?? null,
+        JSON.stringify(embeds),
       ],
     );
 
@@ -555,8 +567,8 @@ export async function forwardMessage(
     await withTransaction(async (tx) => {
       await tx.query(
         `INSERT INTO messages (id, channel_id, guild_id, author_id, content, type,
-                               reference_message_id, reference_channel_id, reference_type)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+                               reference_message_id, reference_channel_id, reference_type, embeds)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)`,
         [
           newId,
           targetId,
@@ -567,6 +579,7 @@ export async function forwardMessage(
           source.id,
           source.channel_id,
           REFERENCE_TYPE_FORWARD,
+          JSON.stringify(toEmbeds(source.embeds)),
         ],
       );
       await setLastMessageId(tx as unknown as Queryable, targetId, newId);

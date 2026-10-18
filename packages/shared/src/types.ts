@@ -1,5 +1,4 @@
 import type { ChannelType, MessageType, PresenceStatus, RelationshipType } from "./constants.js";
-
 /**
  * Wire/domain types shared between server and web client. All ids are strings
  * (snowflakes). Timestamps are ISO-8601 strings on the wire.
@@ -138,6 +137,25 @@ export interface Reaction {
   users?: string[];
 }
 
+/**
+ * A structured, self-contained embed. Nebula never fetches remote URLs to build
+ * embeds: every field here is supplied verbatim by an authenticated caller and
+ * rendered client-side from the stored values only.
+ */
+export interface Embed {
+  title: string | null;
+  description: string | null;
+  url: string | null;
+  color: number | null;
+  fields: EmbedField[];
+}
+
+export interface EmbedField {
+  name: string;
+  value: string;
+  inline: boolean;
+}
+
 export interface Message {
   id: string;
   channelId: string;
@@ -155,7 +173,7 @@ export interface Message {
   flags: number;
   attachments: Attachment[];
   reactions: Reaction[];
-  embeds: unknown[];
+  embeds: Embed[];
   referencedMessage: Message | null;
   threadId: string | null;
   nonce: string | null;
@@ -263,4 +281,66 @@ export interface ApiErrorBody {
     message: string;
     details?: Record<string, unknown>;
   };
+}
+
+/**
+ * Slash-command metadata. Mirrors the server registry so the composer can render
+ * autocomplete, argument hints and validation errors without hard-coding command
+ * knowledge in the client.
+ */
+export interface CommandOption {
+  name: string;
+  description: string;
+  /** Argument type: 3 = string, 4 = integer, 5 = boolean, 6 = user, 8 = choice. */
+  type: number;
+  required: boolean;
+  /** Allowed values for choice arguments (type 8). */
+  choices?: string[];
+  /** Example value shown as a hint. */
+  example?: string;
+}
+
+export interface Command {
+  id: string;
+  name: string;
+  description: string;
+  /** Usage string, e.g. `/me <text>`. */
+  usage: string;
+  options: CommandOption[];
+  dmCapable: boolean;
+  /** True when the command always answers only the invoker (never posts). */
+  ephemeral: boolean;
+}
+
+/** Ephemeral response to an invocation, delivered to the invoker over the gateway. */
+export interface CommandResult {
+  command: string;
+  invocationId: string | null;
+  content: string;
+  ephemeral: boolean;
+}
+
+export interface Webhook {
+  id: string;
+  guildId: string | null;
+  channelId: string;
+  name: string;
+  /** First bytes of the token, safe to display. Never the full token. */
+  tokenPrefix: string;
+  avatarUrl: string | null;
+  creatorId: string | null;
+  disabled: boolean;
+  createdAt: string;
+  lastUsedAt: string | null;
+  rotatedAt: string | null;
+}
+
+export interface WebhookDelivery {
+  id: string;
+  webhookId: string;
+  messageId: string | null;
+  statusCode: number;
+  success: boolean;
+  error: string | null;
+  createdAt: string;
 }
