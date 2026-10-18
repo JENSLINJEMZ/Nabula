@@ -178,6 +178,8 @@ export interface Message {
   threadId: string | null;
   nonce: string | null;
   webhookId: string | null;
+  /** Display-name override for a webhook delivery (author is still the bot user). */
+  webhookName: string | null;
 }
 
 export interface ReadState {
@@ -316,6 +318,7 @@ export interface Command {
 export interface CommandResult {
   command: string;
   invocationId: string | null;
+  channelId: string;
   content: string;
   ephemeral: boolean;
 }

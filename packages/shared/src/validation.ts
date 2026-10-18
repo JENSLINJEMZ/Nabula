@@ -1,5 +1,6 @@
 import { Limits } from "./constants.js";
 import { Errors } from "./errors.js";
+import type { Embed, EmbedField } from "./types.js";
 
 /**
  * Shared validation helpers. These are deliberately framework-free so the same
@@ -128,4 +129,97 @@ export function generateDiscriminator(): string {
 
 export function assertNever(value: never): never {
   throw Errors.INTERNAL({ value: String(value) }, `Unhandled variant: ${String(value)}`);
+}
+
+/**
+ * Validate and normalize caller-supplied embeds.
+ *
+ * Embeds are *self-contained*: Nebula never dereferences `url` (which would be
+ * an SSRF vector); the URL is stored as a plain link rendered by the client.
+ * The normalizer caps the number of embeds, per-field lengths and total size,
+ * and rejects non-http(s) URLs and malformed colors.
+ */
+export function normalizeEmbeds(input: unknown): { embeds: Embed[]; error: string | null } {
+  try {
+    return { embeds: parseEmbedsStrict(input), error: null };
+  } catch (error) {
+    return { embeds: [], error: error instanceof Error ? error.message : "Invalid embed." };
+  }
+}
+
+const EMBED_FIELDS_MAX = 25;
+const EMBED_URL_MAX = 2048;
+const EMBED_FIELD_NAME_MAX = 256;
+const EMBED_FIELD_VALUE_MAX = 1024;
+
+function parseEmbedsStrict(input: unknown): Embed[] {
+  if (input === undefined || input === null) return [];
+  if (!Array.isArray(input)) throw new Error("embeds must be an array.");
+  if (input.length > Limits.EMBEDS_MAX_PER_MESSAGE) {
+    throw new Error(`A message may contain at most ${Limits.EMBEDS_MAX_PER_MESSAGE} embeds.`);
+  }
+
+  let total = 0;
+  const text = (value: unknown, max: number, field: string): string | null => {
+    if (value === undefined || value === null) return null;
+    if (typeof value !== "string") throw new Error(`${field} must be a string.`);
+    const trimmed = value.trim();
+    if (trimmed.length > max) throw new Error(`${field} exceeds ${max} characters.`);
+    total += trimmed.length;
+    return trimmed || null;
+  };
+
+  const embeds: Embed[] = [];
+  for (const raw of input) {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+      throw new Error("Each embed must be an object.");
+    }
+    const embed = raw as Record<string, unknown>;
+    const title = text(embed.title, Limits.EMBED_TITLE_MAX, "embed.title");
+    const description = text(embed.description, Limits.EMBED_DESCRIPTION_MAX, "embed.description");
+    const url = text(embed.url, EMBED_URL_MAX, "embed.url");
+    if (url && !/^https?:\/\//i.test(url)) throw new Error("embed.url must be an http(s) URL.");
+
+    let color: number | null = null;
+    if (embed.color !== undefined && embed.color !== null) {
+      if (
+        typeof embed.color !== "number" ||
+        !Number.isInteger(embed.color) ||
+        embed.color < 0 ||
+        embed.color > 0xffffff
+      ) {
+        throw new Error("embed.color must be an integer between 0 and 16777215.");
+      }
+      color = embed.color;
+    }
+
+    const fields: EmbedField[] = [];
+    if (embed.fields !== undefined && embed.fields !== null) {
+      if (!Array.isArray(embed.fields)) throw new Error("embed.fields must be an array.");
+      if (embed.fields.length > EMBED_FIELDS_MAX) {
+        throw new Error(`An embed may contain at most ${EMBED_FIELDS_MAX} fields.`);
+      }
+      for (const rawField of embed.fields) {
+        if (typeof rawField !== "object" || rawField === null) {
+          throw new Error("Each embed field must be an object.");
+        }
+        const field = rawField as Record<string, unknown>;
+        const name = text(field.name, EMBED_FIELD_NAME_MAX, "embed field name");
+        const value = text(field.value, EMBED_FIELD_VALUE_MAX, "embed field value");
+        if (!name) throw new Error("Each embed field requires a name.");
+        if (!value) throw new Error("Each embed field requires a value.");
+        fields.push({ name, value, inline: field.inline === true });
+      }
+    }
+
+    if (!title && !description && fields.length === 0) {
+      throw new Error("An embed requires a title, a description, or at least one field.");
+    }
+    embeds.push({ title, description, url, color, fields });
+  }
+
+  if (total > Limits.EMBED_TOTAL_MAX) {
+    throw new Error(`Embed content exceeds ${Limits.EMBED_TOTAL_MAX} characters in total.`);
+  }
+  return embeds;
 }

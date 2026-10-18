@@ -52,13 +52,14 @@ export interface MessageRow {
   application_id: string | null;
   nonce: string | null;
   embeds: unknown;
+  webhook_name: string | null;
   edited_at: Date | null;
   created_at: Date;
 }
 
 const MESSAGE_COLUMNS = `id, channel_id, guild_id, author_id, content, tts, mention_everyone, mention_role_ids,
   flags, type, pinned, reference_message_id, reference_channel_id, reference_type, webhook_id, application_id,
-  nonce, embeds, edited_at, created_at`;
+  nonce, embeds, webhook_name, edited_at, created_at`;
 
 const DELETED_USER: PublicUser = {
   id: "0",
@@ -168,6 +169,7 @@ export async function assembleMessages(viewerId: string, rows: MessageRow[]): Pr
       threadId: null,
       nonce: null,
       webhookId: refRow.webhook_id,
+      webhookName: refRow.webhook_name,
     });
   }
 
@@ -209,6 +211,7 @@ export async function assembleMessages(viewerId: string, rows: MessageRow[]): Pr
         null,
       nonce: row.nonce,
       webhookId: row.webhook_id,
+      webhookName: row.webhook_name,
     });
   }
   return result;
@@ -287,6 +290,8 @@ export interface CreateMessageInput {
   embeds?: Embed[];
   /** Set when the message is authored by a webhook rather than a user. */
   webhookId?: string | null;
+  /** Webhook-only display name override for this message. */
+  webhookName?: string | null;
 }
 
 /**
@@ -381,8 +386,8 @@ export async function createMessage(input: CreateMessageInput): Promise<WireMess
     await tx.query(
       `INSERT INTO messages (id, channel_id, guild_id, author_id, content, tts, mention_everyone,
                              mention_role_ids, flags, type, reference_message_id, reference_channel_id,
-                             reference_type, webhook_id, nonce, embeds)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::bigint[], $9, $10, $11, $2, $12, $13, $14, $15::jsonb)`,
+                             reference_type, webhook_id, nonce, embeds, webhook_name)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8::bigint[], $9, $10, $11, $2, $12, $13, $14, $15::jsonb, $16)`,
       [
         messageId,
         input.channelId,
@@ -399,6 +404,7 @@ export async function createMessage(input: CreateMessageInput): Promise<WireMess
         input.webhookId ?? null,
         input.nonce ?? null,
         JSON.stringify(embeds),
+        input.webhookName ?? null,
       ],
     );
 

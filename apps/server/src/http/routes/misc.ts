@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { Errors, Permissions, ServerEvents } from "@nebula/shared";
+import { Errors, Limits, Permissions, ServerEvents } from "@nebula/shared";
 import type { FastifyInstance } from "fastify";
 import { env } from "../../config.js";
 import {
@@ -17,8 +17,11 @@ import {
   deleteWebhook,
   executeWebhook,
   listChannelWebhooks,
+  listWebhookDeliveries,
+  rotateWebhookToken,
+  updateWebhook,
 } from "../../domain/webhooks.js";
-import { emitInteractionResult, invokeCommand, listCommands } from "../../domain/slashCommands.js";
+import { emitInteractionResult, invokeCommand, listCommands, parseCommandContent } from "../../domain/slashCommands.js";
 import { listNotifications, markNotificationsRead, unreadNotificationCount } from "../../domain/notifications.js";
 import { joinVoiceChannel, leaveVoice, updateVoiceState } from "../../domain/voice.js";
 import { requireChannelRow } from "../../domain/channels.js";
@@ -43,13 +46,21 @@ export async function registerMiscRoutes(app: FastifyInstance): Promise<void> {
       .parse(request.params);
     const body = z
       .object({
-        content: z.string().max(2000),
+        content: z.string().max(Limits.MESSAGE_CONTENT_MAX).optional(),
         username: z.string().max(80).nullable().optional(),
         tts: z.boolean().optional(),
+        embeds: z.array(z.unknown()).max(Limits.EMBEDS_MAX_PER_MESSAGE).optional(),
       })
+      .strict()
       .parse(request.body ?? {});
-    const message = await executeWebhook(webhookId, token, body);
-    return reply.status(201).send({ message });
+    // Idempotency: a repeated key returns the original message instead of
+    // posting a duplicate.
+    const headerKey = request.headers["x-idempotency-key"];
+    const idempotencyKey = typeof headerKey === "string" ? headerKey.slice(0, 128) : null;
+    const result = await executeWebhook(webhookId, token, { ...body, idempotencyKey });
+    return reply
+      .status(result.duplicate ? 200 : 201)
+      .send({ message: result.message, duplicate: result.duplicate });
   });
 
   app.get("/api/health", async (_request, reply) => {
@@ -89,8 +100,11 @@ export async function registerMiscRoutes(app: FastifyInstance): Promise<void> {
   for (const prefix of ["avatars", "icons", "banners"] as const) {
     app.get(`/api/media/${prefix}/:key`, async (request, reply) => {
       const { key } = z.object({ key: z.string().min(1).max(300) }).parse(request.params);
+      // Keys are stored either as `<prefix>/<name>` or as a bare `<name>`; accept
+      // both so a caller cannot be tripped up by the storage convention.
+      const storageKey = key.startsWith(`${prefix}/`) ? key : `${prefix}/${key}`;
       try {
-        const buffer = await readKeyedBlob(`${prefix}/${key}`);
+        const buffer = await readKeyedBlob(storageKey);
         return reply
           .header("Content-Type", contentTypeForBuffer(buffer))
           .header("Content-Length", String(buffer.length))
@@ -207,6 +221,51 @@ export async function registerMiscRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(204).send();
     });
 
+    authed.patch("/api/guilds/:id/webhooks/:webhookId", async (request, reply) => {
+      const { id, webhookId } = z.object({ id: Id, webhookId: Id }).parse(request.params);
+      const body = z
+        .object({ name: z.string().min(1).max(80).optional(), disabled: z.boolean().optional() })
+        .strict()
+        .parse(request.body ?? {});
+      const webhook = await updateWebhook(id, webhookId, currentUserId(request), body);
+      return reply.send({ webhook });
+    });
+
+    // Rotate the token: the new token is returned exactly once.
+    authed.post("/api/guilds/:id/webhooks/:webhookId/rotate", async (request, reply) => {
+      const { id, webhookId } = z.object({ id: Id, webhookId: Id }).parse(request.params);
+      const result = await rotateWebhookToken(id, webhookId, currentUserId(request));
+      return reply.send({ webhook: result.webhook, token: result.token });
+    });
+
+    authed.get("/api/guilds/:id/webhooks/:webhookId/deliveries", async (request, reply) => {
+      const { id, webhookId } = z.object({ id: Id, webhookId: Id }).parse(request.params);
+      const query = z.object({ limit: z.coerce.number().int().min(1).max(100).optional() }).parse(request.query);
+      const deliveries = await listWebhookDeliveries(id, webhookId, currentUserId(request), {
+        limit: query.limit ?? 25,
+      });
+      return reply.send({ deliveries });
+    });
+
+    authed.post("/api/guilds/:id/webhooks/:webhookId/avatar", async (request, reply) => {
+      const { id, webhookId } = z.object({ id: Id, webhookId: Id }).parse(request.params);
+      const userId = currentUserId(request);
+      const { loadMemberContext } = await import("../../domain/permissions.js");
+      const ctx = await loadMemberContext(id, userId);
+      if ((ctx.basePermissions & Permissions.MANAGE_WEBHOOKS) !== Permissions.MANAGE_WEBHOOKS) {
+        throw Errors.MISSING_PERMISSIONS({ permission: "MANAGE_WEBHOOKS" });
+      }
+      const file = await request.file({ limits: { fileSize: env.MAX_UPLOAD_BYTES, files: 1 } });
+      if (!file) throw Errors.VALIDATION_FAILED(undefined, "No file provided.");
+      const buffer = await file.toBuffer();
+      const type = sniffMimeType(buffer, file.mimetype ?? null);
+      if (!type || !ALLOWED_IMAGE_AVATAR.has(type)) throw Errors.UNSUPPORTED_MEDIA_TYPE();
+      const ext = type === "image/png" ? ".png" : type === "image/gif" ? ".gif" : type === "image/webp" ? ".webp" : ".jpg";
+      const key = await saveKeyedBlob("avatars", buffer, ext);
+      const webhook = await updateWebhook(id, webhookId, userId, { avatarKey: key });
+      return reply.send({ webhook });
+    });
+
     // ------------------------------------------------------------- commands
     authed.get("/api/commands", async (request, reply) => {
       const query = z.object({ guildId: Id.optional() }).parse(request.query);
@@ -217,15 +276,34 @@ export async function registerMiscRoutes(app: FastifyInstance): Promise<void> {
       const userId = currentUserId(request);
       const body = z
         .object({
-          name: z.string().min(1).max(32),
+          name: z.string().min(1).max(32).optional(),
+          content: z.string().min(1).max(Limits.MESSAGE_CONTENT_MAX).optional(),
           channelId: Id,
           invocationId: z.string().max(64).optional(),
           args: z.record(z.union([z.string(), z.number()])).optional(),
         })
+        .strict()
         .parse(request.body);
+
+      // The raw command line is parsed server-side; a client may also submit
+      // structured args (e.g. from the autocomplete UI). Either way the server
+      // validates the arguments against the registry before executing.
+      let name: string;
+      let args: Record<string, string | number | undefined>;
+      if (body.content !== undefined) {
+        const parsed = parseCommandContent(body.content);
+        name = parsed.name;
+        args = parsed.args;
+      } else if (body.name !== undefined) {
+        name = body.name;
+        args = body.args ?? {};
+      } else {
+        throw Errors.VALIDATION_FAILED({ field: "content" }, "Provide a command line or a command name.");
+      }
+
       const result = await invokeCommand({
-        name: body.name,
-        args: body.args ?? {},
+        name,
+        args,
         channelId: body.channelId,
         userId,
         invocationId: body.invocationId,
