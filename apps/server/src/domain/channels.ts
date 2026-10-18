@@ -12,6 +12,7 @@ import {
   validateChannelName,
   type Channel as WireChannel,
   type PermissionOverwrite,
+  type ServerEventName,
 } from "@nebula/shared";
 import { nextId } from "../ids.js";
 import { execute, query, queryOne, withTransaction, type Queryable } from "../db/pool.js";
@@ -517,6 +518,37 @@ export async function listDmRecipients(channelId: string) {
   return rows.map(toPublicUser);
 }
 
+/**
+ * Fan out a DM channel change to every recipient: emit `eventFor(userId)` to
+ * each user's room (so sidebars refresh live) and keep their connected sockets
+ * subscribed to the channel room (so messages arrive in realtime without
+ * waiting for a reconnect).
+ */
+export async function notifyDmRecipients(
+  channelId: string,
+  eventFor: (userId: string) => ServerEventName,
+  buildPayload: () => unknown,
+): Promise<void> {
+  const recipients = await listDmRecipients(channelId);
+  if (recipients.length === 0) return;
+  const payload = buildPayload();
+  for (const recipient of recipients) {
+    bus().toUser(recipient.id, eventFor(recipient.id), payload);
+    await bus().joinUserToChannel(recipient.id, channelId);
+  }
+}
+
+/**
+ * Wire view of a DM channel without a membership check — for building mutation
+ * responses and fan-out payloads for users other than the actor (including
+ * users the actor just removed, who can no longer "view" the channel).
+ */
+export async function getDmChannelView(channelId: string): Promise<WireChannel | null> {
+  const row = await requireChannelRow(channelId);
+  if (row.guild_id !== null) return null;
+  return toChannel(row, { permissions: ALL_PERMISSIONS, recipients: await listDmRecipients(channelId) });
+}
+
 /** Find or create the 1:1 DM channel between two users. */
 export async function getOrCreateDmChannel(userAId: string, userBId: string): Promise<ChannelRowFull> {
   if (userAId === userBId) throw Errors.CANNOT_DM_SELF();
@@ -562,6 +594,8 @@ export async function createGroupDm(ownerId: string, userIds: string[]): Promise
   const unique = [...new Set([ownerId, ...userIds])];
   if (unique.length < 2) throw Errors.VALIDATION_FAILED(undefined, "A group DM needs at least two people.");
   if (unique.length > 10) throw Errors.VALIDATION_FAILED(undefined, "Group DMs support at most 10 people.");
+  await assertUsersExist(unique);
+  await assertNoBlockedPairs(unique);
 
   return withTransaction(async (tx) => {
     const id = nextId();
@@ -575,6 +609,126 @@ export async function createGroupDm(ownerId: string, userIds: string[]): Promise
     const row = inserted.rows[0];
     if (!row) throw Errors.INTERNAL(undefined, "Failed to create group DM");
     return row;
+  });
+}
+
+async function isDmRecipient(channelId: string, userId: string): Promise<boolean> {
+  const row = await queryOne(`SELECT 1 FROM dm_recipients WHERE channel_id = $1 AND user_id = $2`, [
+    channelId,
+    userId,
+  ]);
+  return Boolean(row);
+}
+
+/** Throw UNKNOWN_USER when any of the given user ids does not exist. */
+async function assertUsersExist(userIds: string[]): Promise<void> {
+  if (userIds.length === 0) return;
+  const rows = await query<{ id: string }>(`SELECT id FROM users WHERE id = ANY($1::bigint[])`, [userIds]);
+  if (rows.length !== new Set(userIds).size) throw Errors.UNKNOWN_USER();
+}
+
+/** Throw BLOCKED when any two of the given users have a block in either direction. */
+async function assertNoBlockedPairs(userIds: string[]): Promise<void> {
+  if (userIds.length < 2) return;
+  const row = await queryOne<{ blocked: boolean }>(
+    `SELECT EXISTS(
+       SELECT 1 FROM relationships
+        WHERE type = 2 AND user_id = ANY($1::bigint[]) AND target_id = ANY($1::bigint[])
+     ) AS blocked`,
+    [userIds],
+  );
+  if (row?.blocked) throw Errors.BLOCKED();
+}
+
+/**
+ * Add a user to an existing group DM. Only current recipients may add people,
+ * groups are capped at 10 participants, and a block in either direction
+ * between the new user and any existing member prevents the add. Realtime
+ * fan-out (CHANNEL_CREATE / CHANNEL_UPDATE + room joins) is the caller's job.
+ */
+export async function addGroupDmRecipient(
+  channelId: string,
+  actorId: string,
+  targetUserId: string,
+): Promise<ChannelRowFull> {
+  const row = await requireChannelRow(channelId);
+  if (row.guild_id !== null || row.type !== ChannelType.GROUP_DM) throw Errors.UNKNOWN_CHANNEL();
+  if (!(await isDmRecipient(channelId, actorId))) throw Errors.CHANNEL_NOT_ACCESSIBLE();
+  if (targetUserId === actorId) throw Errors.VALIDATION_FAILED(undefined, "You are already in this group DM.");
+
+  const target = await queryOne<{ bot: boolean }>(`SELECT bot FROM users WHERE id = $1`, [targetUserId]);
+  if (!target) throw Errors.UNKNOWN_USER();
+  if (target.bot) throw Errors.VALIDATION_FAILED(undefined, "Bots cannot be added to group DMs.");
+  if (await isDmRecipient(channelId, targetUserId)) {
+    throw Errors.VALIDATION_FAILED(undefined, "That user is already in this group DM.");
+  }
+  const countRow = await queryOne<{ count: string }>(
+    `SELECT COUNT(*)::text AS count FROM dm_recipients WHERE channel_id = $1`,
+    [channelId],
+  );
+  if (Number(countRow?.count ?? "0") + 1 > 10) {
+    throw Errors.VALIDATION_FAILED(undefined, "Group DMs support at most 10 people.");
+  }
+  const current = await query<{ user_id: string }>(
+    `SELECT user_id FROM dm_recipients WHERE channel_id = $1`,
+    [channelId],
+  );
+  await assertNoBlockedPairs([...current.map((r) => r.user_id), targetUserId]);
+  await execute(`INSERT INTO dm_recipients (channel_id, user_id) VALUES ($1, $2)`, [channelId, targetUserId]);
+  return row;
+}
+
+export interface RemoveGroupDmResult {
+  channel: ChannelRowFull;
+  removedUserId: string;
+  /** Recipients remaining after the removal (empty when the group closed). */
+  memberIds: string[];
+  /** True when the group dropped below two participants and was closed for everyone. */
+  closed: boolean;
+}
+
+/**
+ * Remove a participant from a group DM. Anyone may remove themselves (leave);
+ * removing somebody else requires ownership. When fewer than two participants
+ * would remain, the group is closed for everyone (dm_closed) — messages are
+ * preserved but the conversation disappears from every sidebar.
+ */
+export async function removeGroupDmRecipient(
+  channelId: string,
+  actorId: string,
+  targetUserId: string,
+): Promise<RemoveGroupDmResult> {
+  const row = await requireChannelRow(channelId);
+  if (row.guild_id !== null || row.type !== ChannelType.GROUP_DM) throw Errors.UNKNOWN_CHANNEL();
+  if (!(await isDmRecipient(channelId, actorId))) throw Errors.CHANNEL_NOT_ACCESSIBLE();
+  if (!(await isDmRecipient(channelId, targetUserId))) {
+    throw Errors.VALIDATION_FAILED(undefined, "That user is not in this group DM.");
+  }
+  if (actorId !== targetUserId && row.owner_id !== actorId) {
+    throw Errors.MISSING_PERMISSIONS({ permission: "GROUP_DM_OWNER" });
+  }
+
+  return withTransaction(async (tx) => {
+    await tx.query(`DELETE FROM dm_recipients WHERE channel_id = $1 AND user_id = $2`, [channelId, targetUserId]);
+    const remaining = await tx.query<{ user_id: string }>(
+      `SELECT user_id FROM dm_recipients WHERE channel_id = $1 ORDER BY joined_at ASC, user_id ASC`,
+      [channelId],
+    );
+    const memberIds = remaining.rows.map((r) => r.user_id);
+    let closed = false;
+    if (memberIds.length < 2) {
+      await tx.query(`UPDATE channels SET dm_closed = TRUE WHERE id = $1`, [channelId]);
+      closed = true;
+    } else if (row.owner_id === targetUserId) {
+      // The owner left: hand ownership to the longest-standing member.
+      await tx.query(`UPDATE channels SET owner_id = $2 WHERE id = $1`, [channelId, memberIds[0]]);
+    }
+    const updated = await tx.query<ChannelRowFull>(`SELECT ${CHANNEL_COLUMNS} FROM channels WHERE id = $1`, [
+      channelId,
+    ]);
+    const channel = updated.rows[0];
+    if (!channel) throw Errors.INTERNAL(undefined, "Group DM disappeared while updating it");
+    return { channel, removedUserId: targetUserId, memberIds, closed };
   });
 }
 

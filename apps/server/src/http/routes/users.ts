@@ -1,8 +1,15 @@
 import { z } from "zod";
-import { Errors, Limits } from "@nebula/shared";
+import { Errors, Limits, ServerEvents } from "@nebula/shared";
 import type { FastifyInstance } from "fastify";
 import { execute } from "../../db/pool.js";
-import { getOrCreateDmChannel, listDmChannels, createGroupDm, listDmRecipients } from "../../domain/channels.js";
+import {
+  getChannelView,
+  getOrCreateDmChannel,
+  listDmChannels,
+  createGroupDm,
+  listDmRecipients,
+  notifyDmRecipients,
+} from "../../domain/channels.js";
 import {
   getNotificationSettings,
   getUserSettings,
@@ -193,16 +200,21 @@ export async function registerUserRoutes(app: FastifyInstance): Promise<void> {
       })
       .parse(request.body);
 
+    let channel;
     if (body.recipients && body.recipients.length > 0) {
-      const channel = await createGroupDm(userId, body.recipients);
-      const recipients = await listDmRecipients(channel.id);
-      return reply.status(201).send({ channel: { ...channel, recipients } });
+      channel = await createGroupDm(userId, body.recipients);
+    } else if (body.recipientId) {
+      channel = await getOrCreateDmChannel(userId, body.recipientId);
+    } else {
+      throw Errors.VALIDATION_FAILED(undefined, "recipientId or recipients is required.");
     }
-    if (!body.recipientId) throw Errors.VALIDATION_FAILED(undefined, "recipientId or recipients is required.");
 
-    const channel = await getOrCreateDmChannel(userId, body.recipientId);
-    const recipients = await listDmRecipients(channel.id);
-    return reply.status(201).send({ channel: { ...channel, recipients } });
+    // Notify every participant so their DM sidebar updates live, and subscribe
+    // their connected sockets to the channel room so messages flow in realtime
+    // without waiting for a reconnect.
+    const view = await getChannelView(channel.id, userId);
+    await notifyDmRecipients(channel.id, () => ServerEvents.CHANNEL_CREATE, () => view);
+    return reply.status(201).send({ channel: view ?? { ...channel, recipients: await listDmRecipients(channel.id) } });
   });
 
   app.post("/api/reports", async (request, reply) => {

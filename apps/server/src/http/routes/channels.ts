@@ -2,11 +2,15 @@ import { z } from "zod";
 import { ChannelType, Errors, Limits, deserializePermissions } from "@nebula/shared";
 import type { FastifyInstance } from "fastify";
 import {
+  addGroupDmRecipient,
   closeDmChannel,
   deleteChannel,
   deleteChannelOverwrite,
   getChannelView,
+  getDmChannelView,
   listChannelOverwrites,
+  notifyDmRecipients,
+  removeGroupDmRecipient,
   updateChannel,
   upsertChannelOverwrite,
 } from "../../domain/channels.js";
@@ -162,6 +166,45 @@ export async function registerChannelRoutes(app: FastifyInstance): Promise<void>
       const { id } = IdSchema.parse(request.params);
       await getChannelView(id, currentUserId(request));
       return reply.send({ members: await getThreadMembers(id) });
+    });
+
+    // ---- Group DM participants ----
+    authed.post("/api/channels/:id/recipients", async (request, reply) => {
+      const { id } = IdSchema.parse(request.params);
+      const body = z.object({ userId: Id }).parse(request.body);
+      const actorId = currentUserId(request);
+      await addGroupDmRecipient(id, actorId, body.userId);
+      const view = await getDmChannelView(id);
+      // The new participant gets CHANNEL_CREATE; everyone else a CHANNEL_UPDATE
+      // with the refreshed recipient list. All of them are (re)subscribed to
+      // the channel room so messages arrive in realtime immediately.
+      await notifyDmRecipients(
+        id,
+        (uid) => (uid === body.userId ? ServerEvents.CHANNEL_CREATE : ServerEvents.CHANNEL_UPDATE),
+        () => view,
+      );
+      return reply.send({ channel: view });
+    });
+
+    authed.delete("/api/channels/:id/recipients/:userId", async (request, reply) => {
+      const { id, userId } = z.object({ id: Id, userId: Id }).parse(request.params);
+      const actorId = currentUserId(request);
+      const result = await removeGroupDmRecipient(id, actorId, userId);
+
+      bus().toUser(result.removedUserId, ServerEvents.CHANNEL_DELETE, { id, guildId: null });
+      await bus().leaveUserFromChannel(result.removedUserId, id);
+      if (result.closed) {
+        for (const uid of result.memberIds) {
+          bus().toUser(uid, ServerEvents.CHANNEL_DELETE, { id, guildId: null });
+          await bus().leaveUserFromChannel(uid, id);
+        }
+        return reply.send({ deleted: true });
+      }
+      const view = await getDmChannelView(id);
+      for (const recipient of view?.recipients ?? []) {
+        bus().toUser(recipient.id, ServerEvents.CHANNEL_UPDATE, view);
+      }
+      return reply.send({ channel: view });
     });
 
     // ---- Typing (transient; never persisted) ----

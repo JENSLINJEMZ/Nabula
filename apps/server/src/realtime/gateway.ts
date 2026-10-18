@@ -107,6 +107,23 @@ export function attachGateway(httpServer: HttpServer): Server {
     toVoicePeers(channelId, exceptUserId, event, payload) {
       io.to(rooms.voice(channelId)).except(rooms.user(exceptUserId)).emit(event, payload);
     },
+    async joinUserToChannel(userId, channelId) {
+      const sockets = await io.in(rooms.user(userId)).fetchSockets();
+      for (const socket of sockets) {
+        const data = socket.data as SocketData;
+        if (data.channelIds.has(channelId)) continue;
+        await socket.join(rooms.channel(channelId));
+        data.channelIds.add(channelId);
+      }
+    },
+    async leaveUserFromChannel(userId, channelId) {
+      const sockets = await io.in(rooms.user(userId)).fetchSockets();
+      for (const socket of sockets) {
+        const data = socket.data as SocketData;
+        await socket.leave(rooms.channel(channelId));
+        data.channelIds.delete(channelId);
+      }
+    },
     refreshGuild(guildId) {
       void refreshGuildSubscriptions(guildId);
     },

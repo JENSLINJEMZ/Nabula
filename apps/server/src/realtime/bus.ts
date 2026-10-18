@@ -17,6 +17,14 @@ export interface RealtimeBus {
   /** Send to every socket currently in a voice room except one user. */
   toVoicePeers(channelId: string, exceptUserId: string, event: ServerEventName, payload: unknown): void;
   /**
+   * Subscribe every one of a user's active connections to a channel room.
+   * Needed for channels created *after* connect (e.g. new DMs and group DMs):
+   * without it, recipients only receive realtime messages after a reconnect.
+   */
+  joinUserToChannel(userId: string, channelId: string): Promise<void>;
+  /** Unsubscribe every one of a user's active connections from a channel room. */
+  leaveUserFromChannel(userId: string, channelId: string): Promise<void>;
+  /**
    * Ask the gateway to recompute per-connection channel subscriptions for a
    * guild. Must be called whenever a change could alter who can see which
    * channel (role edits, overwrite edits, membership changes) so that clients
@@ -31,6 +39,8 @@ const noop: RealtimeBus = {
   toUser: () => undefined,
   toSocket: () => undefined,
   toVoicePeers: () => undefined,
+  joinUserToChannel: async () => undefined,
+  leaveUserFromChannel: async () => undefined,
 };
 
 let current: RealtimeBus = noop;
