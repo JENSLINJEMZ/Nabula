@@ -28,16 +28,20 @@ test.describe("Nebula web app — group DMs", () => {
     // "Add people" only exists on group DMs — proves this is a group, not a 1:1.
     await expect(page.getByTitle("Add people")).toBeVisible();
     await expect(page.getByTitle("Leave group DM")).toBeVisible();
+    // Capture this run's group id so sidebar assertions target exactly this
+    // conversation (the shared dev DB accumulates conversations across runs).
+    const groupId = new URL(page.url()).pathname.split("/").pop()!;
 
     const message = `group-hello-${Date.now()}`;
     await page.locator("textarea").first().fill(message);
     await page.locator("textarea").first().press("Enter");
-    await expect(page.getByText(message, { exact: false })).toBeVisible({ timeout: 15_000 });
+    await expect(page.locator('[id^="msg-"]', { hasText: message }).last()).toBeVisible({ timeout: 15_000 });
 
     // Alice's sidebar labels the group distinctly from a 1:1 DM.
     await page.getByRole("button", { name: "dms", exact: true }).click();
-    const aliceGroupRow = page.getByRole("button", { name: "Bob (group DM)" });
+    const aliceGroupRow = page.locator(`button[data-channel-id="${groupId}"]`);
     await expect(aliceGroupRow).toHaveCount(1);
+    await expect(aliceGroupRow).toHaveAttribute("aria-label", "Bob (group DM)");
 
     /* ------------------------------------------------------- bob sees it */
 
@@ -47,12 +51,13 @@ test.describe("Nebula web app — group DMs", () => {
     await bob.getByRole("button", { name: "dms", exact: true }).click();
 
     // The group appears in bob's sidebar without a reload: realtime CHANNEL_CREATE.
-    const bobGroupRow = bob.getByRole("button", { name: "Alice (group DM)" });
+    const bobGroupRow = bob.locator(`button[data-channel-id="${groupId}"]`);
     await expect(bobGroupRow).toBeVisible({ timeout: 15_000 });
+    await expect(bobGroupRow).toHaveAttribute("aria-label", "Alice (group DM)");
 
     // Opening it loads the conversation; group-only controls confirm the type.
     await bobGroupRow.click();
-    await expect(bob.getByText(message, { exact: false })).toBeVisible({ timeout: 15_000 });
+    await expect(bob.locator('[id^="msg-"]', { hasText: message }).last()).toBeVisible({ timeout: 15_000 });
     await expect(bob.getByTitle("Leave group DM")).toBeVisible();
 
     /* --------------------------------------------------- bob leaves (closes) */
@@ -60,11 +65,11 @@ test.describe("Nebula web app — group DMs", () => {
     bob.once("dialog", (dialog) => void dialog.accept());
     await bob.getByTitle("Leave group DM").click();
     await expect(bob).toHaveURL(/\/channels\/@me$/);
-    await expect(bob.getByRole("button", { name: "Alice (group DM)" })).toHaveCount(0);
+    await expect(bob.locator(`button[data-channel-id="${groupId}"]`)).toHaveCount(0);
 
     // Alice receives CHANNEL_DELETE in realtime and is navigated home too.
     await expect(page).toHaveURL(/\/channels\/@me$/, { timeout: 15_000 });
-    await expect(page.getByRole("button", { name: "Bob (group DM)" })).toHaveCount(0);
+    await expect(page.locator(`button[data-channel-id="${groupId}"]`)).toHaveCount(0);
 
     expect(errors).toEqual([]);
     await bobCtx.close();

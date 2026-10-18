@@ -633,9 +633,11 @@ export const useApp = create<AppState>()((set, get) => {
       const parent = get().activeChannelId;
       const guildId = get().activeGuildId;
       set({ activeThreadId: threadId, pinnedOpen: false });
+      // Navigate before loading: the URL is the source of truth, so a slow or
+      // failed message fetch must not strand the client on the parent URL.
+      if (!opts?.silent && guildId && parent) navTo?.(`/channels/${guildId}/${parent}/threads/${threadId}`);
       await get().loadMessages(threadId);
       void get().ackChannel(threadId);
-      if (!opts?.silent && guildId && parent) navTo?.(`/channels/${guildId}/${parent}/threads/${threadId}`);
     },
 
     closeThread() {
@@ -743,7 +745,11 @@ export const useApp = create<AppState>()((set, get) => {
     /* -------------------------------------------------------- messages */
 
     async loadMessages(channelId) {
-      const res = await apiGet<{ messages: Message[] }>(`/api/channels/${channelId}/messages?limit=50`);
+      // Resilient by design: a failed fetch surfaces as a toast and keeps the
+      // current (or empty) message list rather than rejecting — callers like
+      // openThread/selectChannel must not be thrown off course by one bad GET.
+      const res = await run(async () => apiGet<{ messages: Message[] }>(`/api/channels/${channelId}/messages?limit=50`));
+      if (!res) return;
       set((s) => ({ messagesByChannel: { ...s.messagesByChannel, [channelId]: res.messages } }));
     },
 

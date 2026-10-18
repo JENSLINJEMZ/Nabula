@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { ChatShell } from "./components/Chat";
+import { ApiError } from "./lib/api";
 import { LAST_CHANNEL_KEY, LAST_DM_KEY, LAST_GUILD_KEY, setRouterNavigator, useApp } from "./store";
 
 /**
@@ -70,9 +71,13 @@ function useRouteSync(target: RouteTarget) {
           const fresh = useApp.getState();
           if (fresh.activeGuildId !== guildId) await fresh.selectGuild(guildId, { silent: true });
         }
-      } catch {
-        // Deep link to a guild/channel/DM the user can't access: send them home.
-        navigate("/channels/@me", { replace: true });
+      } catch (error) {
+        // A definitive "not found / not allowed" deep link goes home. Transient
+        // failures (rate limiting, 5xx, network) must not destroy the deep
+        // link: the URL is kept and a reload retries the restore.
+        if (error instanceof ApiError && (error.status === 401 || error.status === 403 || error.status === 404)) {
+          navigate("/channels/@me", { replace: true });
+        }
       }
     })();
   }, [home, guildId, channelId, dmId, threadId, navigate]);

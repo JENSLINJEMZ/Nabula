@@ -600,6 +600,7 @@ function HomeSidebar() {
                   <button
                     type="button"
                     onClick={() => void selectDm(dm.id)}
+                    data-channel-id={dm.id}
                     aria-label={dm.type === 3 ? `${label} (group DM)` : undefined}
                     className={cx(
                       "flex w-full items-center gap-2 rounded px-2 py-1.5 text-left",

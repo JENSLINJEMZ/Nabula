@@ -32,6 +32,9 @@ const EnvSchema = z.object({
     .enum(["true", "false"])
     .default("false")
     .transform((v) => v === "true"),
+  // Global per-user (or per-IP) request budget per minute. The e2e suite raises
+  // this for local test runs; production keeps the 600 default.
+  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(600),
 
   SMTP_URL: z.string().optional(),
 });
@@ -66,6 +69,7 @@ if (isProduction) {
   if (env.SESSION_SECRET.length < 32) problems.push("SESSION_SECRET should be at least 32 characters in production");
   if (!env.COOKIE_SECURE) problems.push("COOKIE_SECURE must be true in production");
   if (env.RATE_LIMIT_DISABLED) problems.push("RATE_LIMIT_DISABLED must be false in production");
+  if (env.RATE_LIMIT_MAX > 100_000) problems.push("RATE_LIMIT_MAX is set so high that rate limiting is effectively disabled");
   if (problems.length > 0) {
     // eslint-disable-next-line no-console
     console.error(`Refusing to start in production:\n${problems.map((p) => `  - ${p}`).join("\n")}`);

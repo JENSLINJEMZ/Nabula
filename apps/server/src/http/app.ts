@@ -69,7 +69,7 @@ export async function buildApp(): Promise<FastifyInstance> {
   if (!env.RATE_LIMIT_DISABLED) {
     await app.register(rateLimit, {
       global: true,
-      max: 600,
+      max: env.RATE_LIMIT_MAX,
       timeWindow: "1 minute",
       keyGenerator: (request) => request.auth?.userId ?? request.ip,
       allowList: [],
