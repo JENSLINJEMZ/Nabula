@@ -3,11 +3,11 @@
 | Field | Value |
 | --- | --- |
 | Document | IMPLEMENTATION_PLAN.md |
-| Status | **Planned** — 7 milestones defined; the core of a working slice is implemented (see [FEATURE_MATRIX.md](./FEATURE_MATRIX.md) for what is verified vs not built) |
+| Status | **In progress** — M1–M4 core implemented and verified; routing, threads, and group DMs delivered this cycle (see [FEATURE_MATRIX.md](./FEATURE_MATRIX.md) for what is verified vs not built) |
 | Version | 0.1.0 |
-| Last updated | 2026-10-17 |
+| Last updated | 2026-10-18 |
 
-> Status note: all work below is **planned**. No milestone is complete. Milestone exit criteria are objective gates; a milestone is not "done" until its criteria and the associated tests in [TEST_PLAN.md](./TEST_PLAN.md) pass.
+> Status note: milestone exit criteria are objective gates; a milestone is not "done" until its criteria and the associated tests in [TEST_PLAN.md](./TEST_PLAN.md) pass. Tasks marked **Done** have passing tests; everything else below is planned.
 
 ---
 
@@ -266,14 +266,14 @@ Tasks are ordered so each row can start only after the rows it depends on. IDs a
 | T3.1 | Schema: messages, reactions, pins, read_states | T2.3 |
 | T3.2 | Message REST (list/send/edit/delete/bulk) + nonce dedup | T3.1, T2.4 |
 | T3.3 | Reaction/pin/typing/ack REST | T3.1 |
-| T3.4 | Threads schema + create/join/leave/archive | T3.1 |
+| T3.4 | Threads schema + create/join/leave/archive | T3.1 | **Done** (4 integration tests) |
 | T3.5 | Redis Socket.IO adapter + room model | T2.12, T1.7 |
 | T3.6 | `READY`/`RESUME`/`seq` gap handling + backpressure | T3.5 |
 | T3.7 | Dispatch scoping + room re-check on permission change | T3.5, T2.4 |
 | T3.8 | Web: message list + grouping + virtualization | T2.13, T3.2 |
 | T3.9 | Web: composer + sanitizing markdown renderer + mentions | T3.8 |
 | T3.10 | Web: reactions, pins, reply, typing, unread divider | T3.8, T3.3 |
-| T3.11 | Web: thread panel | T3.8, T3.4 |
+| T3.11 | Web: thread panel | T3.8, T3.4 | **Done** (browser spec: create/post/close/deep-link) |
 | T3.12 | Realtime multi-client + reconnect/ordering tests | T3.6, T3.7 |
 
 ### Reach & richness (M4)
@@ -282,14 +282,14 @@ Tasks are ordered so each row can start only after the rows it depends on. IDs a
 | T4.1 | Schema: friend_requests, friendships, blocks | T1.11 |
 | T4.2 | Relationships REST + events | T4.1, T3.5 |
 | T4.3 | DM/group-DM schema (`dm_channels`, `dm_recipients`) | T2.3 |
-| T4.4 | DM/group-DM REST + recipient management | T4.3, T4.1 |
+| T4.4 | DM/group-DM REST + recipient management | T4.3, T4.1 | **Done** (8 integration tests) |
 | T4.5 | Storage port (local + S3 driver) + key generation | T1.2 |
 | T4.6 | Upload pipeline: size, magic bytes, dims, quota | T4.5, T1.5 |
 | T4.7 | Auth-gated download + `Content-Disposition`/`nosniff` | T4.5, T2.4 |
 | T4.8 | Message attachment binding | T4.6, T3.2 |
 | T4.9 | Search: `content_tsv`, GIN index, query endpoint | T3.1 |
 | T4.10 | Notifications: unread/mention counts, settings, in-app | T3.1, T3.5 |
-| T4.11 | Web: friends + DMs + group DMs | T4.2, T4.4, T2.13 |
+| T4.11 | Web: friends + DMs + group DMs | T4.2, T4.4, T2.13 | **Done** (browser spec: group-DM create/add/leave) |
 | T4.12 | Web: upload UI + lightbox + search UI + notification center | T4.8, T4.9, T4.10 |
 | T4.13 | DM/block + upload/authorization tests (H-05/06/09, U-01…U-05) | T4.4, T4.7 |
 

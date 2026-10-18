@@ -5,7 +5,7 @@
 | Document | FINAL_ACCEPTANCE_REPORT.md |
 | Status | **Verified against running code** (see evidence below) |
 | Version | 0.1.0 |
-| Date | 2026-10-17 |
+| Date | 2026-10-18 |
 | Scope | `apps/server` (Fastify + Socket.IO + Postgres + Redis), `apps/web` (React + Vite), `packages/shared` |
 | Verification basis | Every result below was produced by a command that was actually executed in this workspace. Nothing here is a projection. |
 
@@ -18,7 +18,7 @@
 | Check | Command | Result |
 | --- | --- | --- |
 | Typecheck (all workspaces) | `npm run typecheck` | **PASS** — `@nebula/shared`, `@nebula/server`, `@nebula/web` all clean |
-| Production web build | `npm run build` | **PASS** — 1639 modules; `index-*.js` 321.85 kB (93.68 kB gzip), `index-*.css` 24.75 kB (5.33 kB gzip) |
+| Production web build | `npm run build` | **PASS** — 1653 modules; `index-*.js` 374.19 kB (110.70 kB gzip), `index-*.css` 25.66 kB (5.44 kB gzip) |
 | Backend start | `npm start` (cwd `apps/server`) | **PASS** — logs `nebula server ready`, `GET /api/health` → `{"ok":true,"storage":"local"}` |
 | Migrations | applied on boot | **PASS** — `database already up to date, migrations: 3` (30 tables) |
 
@@ -31,13 +31,15 @@
 | Shared unit tests | `packages/shared/test/{permissions,snowflake}.test.ts` | 18 | **18/18 pass** |
 | Server integration (journeys) | `apps/server/test/journeys.test.ts` | 13 | **13/13 pass** |
 | Server integration (security) | `apps/server/test/security.test.ts` | 14 | **14/14 pass** |
-| Browser end-to-end (Playwright, real Chromium) | `apps/web/e2e/{app,realtime}.spec.ts` | 11 | **11/11 pass** |
-| **Total** | | **56** | **56/56 pass** |
+| Server integration (threads) | `apps/server/test/threads.test.ts` | 4 | **4/4 pass** |
+| Server integration (group DMs) | `apps/server/test/group-dms.test.ts` | 8 | **8/8 pass** |
+| Browser end-to-end (Playwright, real Chromium) | `apps/web/e2e/*.spec.ts` | 17 | **17/17 pass** (+2 auth-setup) |
+| **Total** | | **76** | **76/76 pass** |
 
 Commands:
 
 ```bash
-npm test                 # shared (18) + server (27)
+npm test                 # shared (18) + server (39)
 npm run test:e2e         # Playwright — needs the dev stack + seeded DB running
 ```
 
@@ -77,8 +79,11 @@ Additional browser-verified UI flows: user settings (profile/sessions), server s
 - **Permissions** — bitfield (bits 0–52), base resolution, ADMINISTRATOR collapse, role OR-ing, overwrite precedence, member-overwrite-last, implicit rules, timeout stripping — **14 unit tests**; hierarchy + overwrite enforcement integration-tested.
 - **Users** — public profile projection (private fields omitted — tested), profile edit, presence (online/idle/dnd/invisible), custom status, **username search** (prefix; auth-required; no email leak — 2 new tests this session).
 - **Relationships** — friend request accept/remove, directional blocks with DM/friend-request suppression (J7/J11), username-based discovery.
+- **Group DMs** — create with up to 10 participants; add/remove participants (owner removes others, anyone leaves); ownership transfer on owner leave; group closes below 2 members; blocked pairs prevented on create and add; realtime `CHANNEL_CREATE/UPDATE/DELETE` fan-out with live channel-room joins so new participants receive messages without reconnecting (8 integration + 1 browser test).
+- **Routing** — react-router: URL is the source of truth; deep links for guilds/channels/DMs/threads, browser back/forward, 404 view (4 browser tests).
 - **Guilds & members** — create/delete, settings, transfer ownership, leave, member list (hoisted roles, online/offline groups), kick/ban/unban, nickname, timeout (duration-bounded), audit log (`VIEW_AUDIT_LOG`).
 - **Channels** — text/voice/category types, settings (topic/nsfw/slowmode/user-limit/parent), permission overwrites (tri-state editor: neutral/allow/deny), per-channel computed permission string.
+- **Threads** — public (11) and private (12) threads with panel UI: create from message or channel, post, join/leave, archive, deep-link; private threads are membership-gated server-side (4 integration + 1 browser test).
 - **Roles** — CRUD, ordering + hierarchy gating, member assignment, appearance (color/hoist/mentionable), permission editor.
 - **Messaging** — send/edit/delete (author-or-manage), reply, reactions (unicode; realtime ±1 delta), pins/unpins, typing indicator (realtime, verified), read-state + unread/mention generation and **channel + DM unread/mention badges**, mention parsing (`<@>`, `<@&>`, `<#>`, `@everyone`/`@here`, gated), **markdown subset with sanitisation** (no raw HTML), message grouping + day dividers + jump-to-message, nonce/id dedup.
 - **Search** — cross-channel message search with access scoping (does not leak inaccessible guilds — tested), result jump.
@@ -100,7 +105,6 @@ These are implemented and were exercised manually/in-browser during development,
 - Notification center UI actions; pins panel; DM/friend list UI beyond the e2e flows.
 - Presence transitions beyond the online path; custom-status rendering.
 - Slash-command and webhook **backend** endpoints (`/api/commands`, `/api/interactions`, `/api/channels/:id/webhooks`, `POST /api/webhooks/:webhookId/:token`) — routes exist; **no UI**, not covered by tests.
-- Threads **backend** endpoints (`/api/channels/:id/threads`, thread-members) — routes exist; **no UI**, not covered by tests.
 - `POST /api/channels/:id/messages/bulk-delete` (purge) — route exists; no UI.
 - Storage driver abstraction is local-disk only; S3 path is documented, not implemented.
 
@@ -117,15 +121,12 @@ The following are deliberately absent. Where the backend endpoint exists but has
 | SFU scaling (mediasoup/LiveKit) | Not built (mesh only; documented scaling path). |
 | Voice E2E encryption | Not built (in-transit DTLS-SRTP only). |
 | Server mute/deafen/move from UI | Not built (no UI; `MUTE_MEMBERS` etc. exist in the bitfield). |
-| Threads UI | Not built (backend routes only). |
 | Slash commands UI / webhook UI | Not built (backend routes only). |
-| Group DM creation UI | Not built (`createGroupDm` store action exists, unwired). |
 | Avatar / guild-icon upload UI | Not built (backend routes exist; UI states "avatar is generated"). |
 | Change password / account delete | Not built (no routes, no UI). |
 | Email verification / password reset | Out of scope (no SMTP); returns `MAIL_NOT_CONFIGURED`, never simulated. |
 | Real 2FA enrollment | Not built — `mfaEnabled` is always `false` (no enrollment flow). |
 | Light theme | Not built — the field exists but only the dark theme is styled. |
-| Client-side routing (react-router) | Dependency installed but **unused**; the app is a state-driven single shell. |
 | Message forwarding | Not built. |
 | System messages (join/pin/rename/call) | Not built (only `DEFAULT`, `REPLY`, `THREAD_STARTER_MESSAGE`). |
 | Announcement/forum/stage channel **creation UI** | Not built (server accepts the types; UI creates text/voice only). |
@@ -207,10 +208,9 @@ Seeded accounts (`nebula_alice` owner, `nebula_bob`, `nebula_carol`) share the d
 ## 11. Known limitations
 
 - Voice is **audio-only mesh** (≤ ~8 participants by design) and needs TURN for real network conditions.
-- The web client is a single state-driven shell with no URL routing (no deep links / back-button navigation).
 - No OS notifications; notifications are in-app.
 - Only the dark theme is styled; the theme field is present but light is unimplemented.
-- Several backend features (threads, slash commands, webhooks, purge, avatar/icon upload) have endpoints but no UI.
+- Slash commands, webhooks, purge and avatar/icon upload have endpoints but no UI.
 - Snowflake "monotonic per worker only"; multi-process ID allocation assumes distinct worker ids.
 - Search uses the DB's matching with access scoping; ranking/recent-index lag is not tuned.
 
@@ -220,12 +220,11 @@ Seeded accounts (`nebula_alice` owner, `nebula_bob`, `nebula_carol`) share the d
 
 1. **Wire coturn + `VITE_ICE_SERVERS`** and re-test voice across NAT (closes the only *blocked* user-facing capability).
 2. **Add Playwright assertions for the 7 remaining journeys** (invite join, channel create, role/overwrite edit, block UI, moderation-denied UI) to move 12/12 browser coverage.
-3. **Decide on the "backend-only" features**: either build minimal UI for threads / slash commands / webhooks / avatar upload / group DM, or explicitly mark them out of scope in `FEATURE_MATRIX.md`.
+3. **Decide on the remaining "backend-only" features**: build minimal UI for slash commands / webhooks / avatar upload, or explicitly mark them out of scope in `FEATURE_MATRIX.md`.
 4. **Add camera video + screen share** (`getUserMedia({video})`, `getDisplayMedia`) with the documented unsupported-browser fallback.
-5. **Introduce client routing** (react-router is already a dependency) for channel/DM deep links.
-6. **Typecheck the e2e specs** (add a `tsconfig.e2e.json` including `e2e/**` + Node types) so CI catches spec drift.
-7. **Production hardening**: real `SESSION_SECRET`, `COOKIE_SECURE=true`, TLS proxy, production Dockerfiles, and enable the Redis socket.io adapter for multi-node.
-8. **Load/perf harness** for gateway fan-out and message throughput.
+5. **Typecheck the e2e specs** (add a `tsconfig.e2e.json` including `e2e/**` + Node types) so CI catches spec drift.
+6. **Production hardening**: real `SESSION_SECRET`, `COOKIE_SECURE=true`, TLS proxy, production Dockerfiles, and enable the Redis socket.io adapter for multi-node.
+7. **Load/perf harness** for gateway fan-out and message throughput.
 
 ---
 
@@ -237,7 +236,7 @@ npm install
 cp .env.example apps/server/.env
 npm run db:migrate && npm run seed
 npm run typecheck          # 3 workspaces clean
-npm test                   # shared 18 + server 27
+npm test                   # shared 18 + server 39
 npm run build              # web production bundle
 # with the dev stack running (npm run dev:server & npm run dev:web):
 npm run test:e2e           # Playwright — a setup project logs in as alice+bob once (2 logins)

@@ -314,7 +314,7 @@ S1/S2 block a milestone exit. S3/S4 are tracked but may ship with a documented l
 
 ---
 
-## 14. Reconciled results (executed 2026-10-17)
+## 14. Reconciled results (executed 2026-10-18)
 
 ### 14.1 Suite inventory & results
 
@@ -323,8 +323,10 @@ S1/S2 block a milestone exit. S3/S4 are tracked but may ship with a documented l
 | Shared unit | `packages/shared/test/{permissions,snowflake}.test.ts` | 18 | **18/18 pass** |
 | Server integration — journeys | `apps/server/test/journeys.test.ts` | 13 | **13/13 pass** |
 | Server integration — security | `apps/server/test/security.test.ts` | 14 | **14/14 pass** |
-| Browser end-to-end | `apps/web/e2e/{app,realtime}.spec.ts` | 11 | **11/11 pass** |
-| **Total** | | **56** | **56/56 pass** |
+| Server integration — threads | `apps/server/test/threads.test.ts` | 4 | **4/4 pass** |
+| Server integration — group DMs | `apps/server/test/group-dms.test.ts` | 8 | **8/8 pass** |
+| Browser end-to-end | `apps/web/e2e/*.spec.ts` | 17 | **17/17 pass** (+2 auth-setup) |
+| **Total** | | **76** | **76/76 pass** |
 
 Static gates (also executed): `npm run typecheck` (3 workspaces clean) and `npm run build` (production bundle produced).
 
@@ -342,14 +344,14 @@ Salted-scrypt storage; hardened session cookies (HttpOnly/SameSite=Lax); CSRF re
 - **Accessibility:** the planned automated `axe` pass is **not built**; accessibility is limited to dialog roles, Escape handling, focus, and keyboard paths (verified manually).
 - **Load/perf:** not built.
 - **Voice:** tested with Chromium fake media devices (real `getUserMedia` join → "Voice connected") plus signalling relay in `J9`; camera/screen-share are not implemented, so no media assertions for them.
-- **Browser journey coverage:** 5 of the 12 journeys currently have dedicated Playwright assertions; the rest are server-verified. Closing this gap is the first test-side next step in the acceptance report.
-- **New this cycle:** two security tests for the added `/api/users/search` endpoint (auth required; no private-field leakage).
+- **Browser journey coverage:** 7 of the 12 journeys currently have dedicated Playwright assertions (J1, J4, J5, J7, J8, J9, J10); the rest are server-verified. Closing this gap is the first test-side next step in the acceptance report.
+- **New this cycle:** two security tests for the added `/api/users/search` endpoint (auth required; no private-field leakage); 4 integration tests for threads (creation, posting, private-thread membership enforcement, archive/join/leave); 8 integration tests for group DMs (creation with participant validation, block enforcement, adds/removals, 10-participant cap, ownership transfer, closure below two members, realtime fan-out with live channel-room joins); browser specs for client routing (deep links, back/forward, 404), threads (create/post/close/deep-link), and group DMs (create, realtime sidebar update, message delivery, leave-closes-group).
 
 ### 14.5 Commands
 
 ```bash
 npm run typecheck       # 3 workspaces
-npm test                # shared (18) + server (27)
+npm test                # shared (18) + server (39)
 npm run build           # web bundle
-npm run test:e2e        # Playwright (11) — dev stack + seeded DB must be running
+npm run test:e2e        # Playwright (17 + 2 auth setup) — dev stack + seeded DB must be running
 ```

@@ -5,7 +5,7 @@
 | Document | FEATURE_MATRIX.md |
 | Status | **Reconciled** — reflects the code that exists in this repository today |
 | Version | 0.1.0 |
-| Last updated | 2026-10-17 |
+| Last updated | 2026-10-18 |
 
 > **Read this first.** This matrix is the single source of truth for feature status. It was written during planning as all-`Planned` and has now been reconciled against the running code and the passing test suites (see [FINAL_ACCEPTANCE_REPORT.md](./FINAL_ACCEPTANCE_REPORT.md) and [TEST_PLAN.md](./TEST_PLAN.md)). Every `Verified` cell is backed by a test or command that was actually run; every gap is stated explicitly rather than implied.
 
@@ -20,7 +20,7 @@
 | `Out of scope` | Excluded on purpose and documented. |
 | `n/a` | Not applicable to that column. |
 
-**Verification totals:** 56 automated tests pass — 18 shared unit, 27 server integration, 11 browser e2e. All 12 required journeys pass integration-side; 5 also pass in-browser.
+**Verification totals:** 76 automated tests pass — 18 shared unit, 39 server integration, 17 browser e2e (+2 browser auth-setup tests). All 12 required journeys pass integration-side; 5 also pass in-browser.
 
 ---
 
@@ -66,7 +66,7 @@
 | Friendships (symmetric) | Relationships | Users | Verified | Verified | Verified (integration J7) | Removal is symmetric |
 | Blocks (directional) | Relationships | Users, DM | Verified | Unverified | Verified (integration J11 + security) | Suppresses DMs/friend requests |
 | Direct message channel (type 1) | DM | Relationships | Verified | Verified | Verified (integration J8 + e2e) | Membership-based |
-| Group DM (type 3) | DM | DM | Verified | Not built | Unverified | Store action exists; no UI to create |
+| Group DM (type 3) | DM | DM | Verified | Verified | Verified (integration + e2e) | ≤10 participants; owner-managed removal; closes below 2 members |
 | Create guild | Guilds | Auth, roles | Verified | Verified | Verified (integration J2) | Creates @everyone + defaults |
 | Guild settings (name/description) | Guilds | Guilds | Verified | Verified | Unverified | Gated by `MANAGE_GUILD` |
 | Delete guild | Guilds | Guilds | Verified | Verified | Unverified | Owner-only |
@@ -81,7 +81,7 @@
 | Announcement channels (type 5) | Channels | Channels | Verified (server accepts type) | Not built | Unverified | No creation UI; no crosspost |
 | Forum channels (type 15) | Channels | Threads | Verified (server accepts type) | Not built | Unverified | No creation UI; no tags/sort |
 | Stage channels (type 13) | Channels | Voice | Verified (voice path) | Partial | Unverified | Treated as voice; no stage UI |
-| Threads (public 11 / private 12) | Channels | Channels | Verified (routes) | Not built | Unverified | `/threads` + thread-members endpoints exist; no UI |
+| Threads (public 11 / private 12) | Channels | Channels | Verified | Verified | Verified (integration + e2e) | Panel UI; private threads membership-gated |
 | Channel settings (topic/nsfw/slowmode/parent) | Channels | Permissions | Verified | Verified | Verified (e2e) | Topic ≤1024 |
 | Permission overwrites (role/member) | Channels/Permissions | Roles | Verified | Verified | Verified (integration J6 + security) | `{targetId,type,allow,deny}` |
 | Channel reorder / positions | Channels | Channels | Not built | Not built | n/a | No drag-reorder / position edit |
@@ -140,18 +140,18 @@
 | Redis adapter for horizontal fan-out | Realtime | Redis, gateway | Not built | n/a | n/a | Dep present (dev); multi-node not exercised |
 | Event scoping/authorization per subscriber | Realtime/Security | Permissions | Verified | n/a | Verified (security search scope) | Never fan out hidden events |
 | Reconnect + resume | Realtime | Redis/PG | Verified (reconnect) | Verified | Unverified | No gap replay buffer |
-| Client subscription management (guild/channel) | Realtime | Gateway | Verified | n/a | Verified (e2e) | Auto-subscribe on connect |
+| Client subscription management (guild/channel) | Realtime | Gateway | Verified | n/a | Verified (e2e) | Auto-subscribe on connect; DM rooms joined on creation/add |
 | Ordering + duplicate suppression | Realtime | Messaging | Verified | Verified | Verified (unit + e2e) | Snowflake order; id dedup |
 | Design system + tokens (Tailwind) | Frontend | — | n/a | Verified | Verified (build) | Original palette; no Discord assets |
 | App shell + responsive layout | Frontend | Design system | n/a | Verified | Verified (e2e) | Mobile drawer; breakpoints xs–xl |
 | Dark/light theme | Frontend | Design system | n/a | Partial | Unverified | Dark only; light unimplemented |
 | Client state (Zustand stores) | Frontend | Gateway | n/a | Verified | Verified (e2e) | Optimistic updates; last-view persistence |
-| Routing (react-router-dom) | Frontend | Web | n/a | Not built | n/a | Dep installed but unused; state-driven shell |
+| Routing (react-router-dom) | Frontend | Web | n/a | Verified | Verified (e2e) | URL is source of truth; deep links, history, 404 |
 | Accessibility (WCAG 2.1 AA target) | Frontend | All UI | n/a | Partial | Unverified | Dialog roles/Escape/keyboard; no axe run |
 | i18n readiness (t(), Intl) | Frontend | All UI | n/a | Not built | n/a | en-US only |
 | Unit tests (`@nebula/shared`, server units) | Testing | — | n/a | n/a | Verified (18) | Vitest |
-| Integration tests (server + real PG/Redis) | Testing | Compose | n/a | n/a | Verified (27) | Real Fastify + Socket.IO |
-| End-to-end tests (Playwright) | Testing | Web+server | n/a | n/a | Verified (11) | 5 of 12 journeys in-browser |
+| Integration tests (server + real PG/Redis) | Testing | Compose | n/a | n/a | Verified (39) | Real Fastify + Socket.IO |
+| End-to-end tests (Playwright) | Testing | Web+server | n/a | n/a | Verified (17) | +2 auth-setup tests; journey coverage in TEST_PLAN §9 |
 | Realtime multi-client tests | Testing | Gateway | n/a | n/a | Verified (e2e) | Two Chromium contexts |
 | Authorization/security tests | Testing | Permissions | n/a | n/a | Verified (14) | Horizontal + vertical cases |
 | Voice tests | Testing | Voice | n/a | n/a | Verified (integration + e2e) | Signalling + fake-device join |
@@ -178,9 +178,9 @@ Foundation (monorepo, config, IDs, errors, DB/Redis, logging)
 
 ## Reconciliation summary
 
-- **Verified end-to-end (server + browser):** auth/sessions, permissions, guilds/roles/channels/overwrites, text messaging (send/edit/delete/reply/react/pin/typing/search/markdown/mentions), friends/blocks, DMs, media upload + authorized access, moderation, realtime, and **audio** voice.
-- **Backend exists, no UI (labelled "Verified (routes) / Not built"):** threads, slash commands, webhooks, message purge, avatar/icon upload, group DM creation.
-- **Not built:** camera video, screen share, server mute/deafen/move UI, change password, account delete, message forwarding, system messages, channel reorder, thumbnails, per-channel notification overrides, OS notifications, light theme, client routing, 2FA enrollment, CI config, production containers, load tests.
+- **Verified end-to-end (server + browser):** auth/sessions, permissions, guilds/roles/channels/overwrites, text messaging (send/edit/delete/reply/react/pin/typing/search/markdown/mentions), friends/blocks, DMs, **group DMs with participant management**, **threads**, **client-side routing (deep links/history/404)**, media upload + authorized access, moderation, realtime, and **audio** voice.
+- **Backend exists, no UI (labelled "Verified (routes) / Not built"):** slash commands, webhooks, message purge, avatar/icon upload.
+- **Not built:** camera video, screen share, server mute/deafen/move UI, change password, account delete, message forwarding, system messages, channel reorder, thumbnails, per-channel notification overrides, OS notifications, light theme, 2FA enrollment, CI config, production containers, load tests.
 - **Blocked:** TURN (cross-NAT voice); mail infra (verification/reset); multi-node realtime (Redis adapter); TLS termination.
 - **Out of scope (documented):** voice E2E encryption, SFU, push, auto-mod, raid detection, third-party bots/OAuth2, email verification/reset.
 

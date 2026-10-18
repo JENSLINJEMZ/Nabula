@@ -1,6 +1,6 @@
 # Nebula
 
-A Discord-inspired, real-time communication platform — **an independent implementation with an original identity**. Servers (guilds), text/voice channels, roles & permissions, friends, DMs, realtime messaging, attachments, moderation, and WebRTC voice.
+A Discord-inspired, real-time communication platform — **an independent implementation with an original identity**. Servers (guilds), text/voice channels, threads, roles & permissions, friends, DMs and group DMs, realtime messaging, attachments, moderation, client-side routing (deep links/history), and WebRTC voice.
 
 > This is not affiliated with, endorsed by, or derived from Discord's proprietary code or assets. The information architecture (guilds → channels → messages) is reproduced; all code, tokens, copy, and branding are original.
 
@@ -11,10 +11,10 @@ Nebula is a working full-stack application, verified by automated tests. The hon
 | Check | Result |
 | --- | --- |
 | Typecheck (3 workspaces) | clean |
-| Unit + integration tests | 45/45 pass |
-| Browser e2e (Playwright) | 11/11 pass |
+| Unit + integration tests | 57/57 pass (18 unit + 39 integration) |
+| Browser e2e (Playwright) | 17/17 pass (+2 auth setup) |
 | Production build | pass |
-| Required journeys (12) verified server-side | 12/12 (5 also in-browser) |
+| Required journeys (12) verified server-side | 12/12 (7 also in-browser) |
 
 ## Stack
 
@@ -30,7 +30,7 @@ nebula/
 ├── apps/
 │   ├── server/        # Fastify API + Socket.IO gateway + raw-SQL migrations/seed
 │   │   ├── src/{http,domain,realtime,db,auth}/…
-│   │   └── test/{journeys,security}.test.ts   # 27 integration tests
+│   │   └── test/{journeys,security,threads,group-dms}.test.ts   # 39 integration tests
 │   └── web/           # React SPA
 │       ├── src/{components,lib}/…
 │       ├── e2e/       # Playwright specs
@@ -76,9 +76,9 @@ Seeded users: `nebula_alice` (guild owner), `nebula_bob`, `nebula_carol`. Their 
 
 ```bash
 npm run typecheck     # tsc --noEmit across all workspaces
-npm test              # shared unit (18) + server integration (27)
+npm test              # shared unit (18) + server integration (39)
 npm run build         # production web bundle
-npm run test:e2e      # Playwright (11) — requires the dev stack + seeded DB running
+npm run test:e2e      # Playwright (17 + 2 auth setup) — requires the dev stack + seeded DB running
 ```
 
 The server integration suite boots the **real** Fastify + Socket.IO stack against an isolated `nebula_test` database — the same routing, auth, CSRF, and permission code that production runs.
