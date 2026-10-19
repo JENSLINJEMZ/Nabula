@@ -44,20 +44,20 @@ export default defineConfig({
       url: "http://localhost:4000/api/health",
       reuseExistingServer: true,
       timeout: 60_000,
+      env: {
+        ...process.env,
+        // The suite drives many browser journeys as one authenticated user,
+        // which exceeds the default 600 req/min global budget and throttles the
+        // later specs. The limiter stays active (just with headroom); its
+        // behaviour is asserted by the server's security integration tests.
+        RATE_LIMIT_MAX: process.env.RATE_LIMIT_MAX ?? "5000",
+      },
     },
     {
       command: "npm run dev",
       url: "http://localhost:5173",
       reuseExistingServer: true,
       timeout: 60_000,
-      env: {
-        ...process.env,
-        // The suite drives ~20 browser journeys as a single authenticated user,
-        // which exceeds the default 600 req/min budget and throttles the last
-        // specs. The limiter stays active (just with headroom); its behaviour
-        // is asserted by the server's security integration tests.
-        RATE_LIMIT_MAX: process.env.RATE_LIMIT_MAX ?? "5000",
-      },
     },
   ],
 });
