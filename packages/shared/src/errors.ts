@@ -68,6 +68,15 @@ export const Errors = {
   UNKNOWN_INVITE: make("UNKNOWN_INVITE", 404, "Unknown or expired invite."),
   UNKNOWN_ATTACHMENT: make("UNKNOWN_ATTACHMENT", 404, "Unknown attachment."),
 
+  // Account security (milestone 1)
+  TOKEN_INVALID: make("TOKEN_INVALID", 400, "This link is invalid or has expired."),
+  EMAIL_NOT_SET: make("EMAIL_NOT_SET", 400, "This account has no email address on file."),
+  INVALID_MFA_CODE: make("INVALID_MFA_CODE", 400, "That authentication code is not valid."),
+  MFA_NOT_ENROLLED: make("MFA_NOT_ENROLLED", 409, "Two-factor authentication is not enabled on this account."),
+  MFA_ALREADY_ENABLED: make("MFA_ALREADY_ENABLED", 409, "Two-factor authentication is already enabled."),
+  MFA_ENROLLMENT_PENDING: make("MFA_ENROLLMENT_PENDING", 409, "Finish or abandon the pending enrollment first."),
+  MAIL_NOT_CONFIGURED: make("MAIL_NOT_CONFIGURED", 503, "Email delivery is not configured on this server."),
+
   // 409
   CONFLICT: make("CONFLICT", 409, "That action conflicts with existing state."),
   ALREADY_FRIENDS: make("ALREADY_FRIENDS", 409, "You are already friends with that user."),

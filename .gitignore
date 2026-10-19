@@ -16,3 +16,5 @@ playwright-report/
 apps/web/e2e/.auth/
 apps/server/data/uploads/
 apps/server/data/tmp/
+# Dev/test email captures contain single-use verification/reset tokens — never commit.
+apps/server/data/mail/

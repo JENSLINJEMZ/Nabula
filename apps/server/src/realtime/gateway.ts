@@ -13,6 +13,7 @@ import { markChannelRead } from "../domain/messages.js";
 import { assertChannelAccess } from "../domain/permissions.js";
 import { clearVoiceOnDisconnect, updateVoiceState } from "../domain/voice.js";
 import { setRealtimeBus, type RealtimeBus } from "./bus.js";
+import { attachSessionRegistry, registerSessionSocket, unregisterSessionSocket } from "./sessionSockets.js";
 
 interface SocketData {
   userId: string;
@@ -128,6 +129,7 @@ export function attachGateway(httpServer: HttpServer): Server {
       void refreshGuildSubscriptions(guildId);
     },
   };
+  attachSessionRegistry(io);
   setRealtimeBus(busImpl);
 
   /**
@@ -179,6 +181,7 @@ export function attachGateway(httpServer: HttpServer): Server {
   io.on("connection", (socket) => {
     const data = socket.data as SocketData;
     const { userId } = data;
+    registerSessionSocket(data.sessionId, socket.id);
 
     /** Send the current gateway state snapshot. Also re-issued on IDENTIFY. */
     const sendReady = async () => {
@@ -377,6 +380,7 @@ export function attachGateway(httpServer: HttpServer): Server {
     );
 
     socket.on("disconnect", (reason) => {
+      unregisterSessionSocket(data.sessionId, socket.id);
       void (async () => {
         try {
           await clearVoiceOnDisconnect(userId);

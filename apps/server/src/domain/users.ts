@@ -112,7 +112,7 @@ export async function searchUsers(queryText: string, excludeUserId: string, limi
 
 export async function getSelfUser(id: string) {
   const row = await queryOne<UserRow & { mfa_enabled: boolean }>(
-    `SELECT ${USER_COLUMNS}, FALSE AS mfa_enabled FROM users WHERE id = $1`,
+    `SELECT ${USER_COLUMNS}, mfa_enabled FROM users WHERE id = $1`,
     [id],
   );
   return row ? toSelfUser(row) : null;

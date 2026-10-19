@@ -54,6 +54,8 @@ export const ServerEvents = {
   VOICE_SIGNAL: "VOICE_SIGNAL",
   /** A slash-command invocation result surfaced back to the invoking client. */
   INTERACTION_RESULT: "INTERACTION_RESULT",
+  /** Emitted immediately before the server force-disconnects a revoked session. */
+  SESSION_REVOKED: "SESSION_REVOKED",
 } as const;
 
 export type ClientEventName = (typeof ClientEvents)[keyof typeof ClientEvents];

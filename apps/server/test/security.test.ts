@@ -70,6 +70,9 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await server?.close();
+  // Do not leak the enabled limiter into other test files that share this
+  // worker process; they expect the vitest-config default (disabled).
+  process.env.RATE_LIMIT_DISABLED = "true";
 });
 
 describe("security", () => {
@@ -289,6 +292,33 @@ describe("security", () => {
       }
     }
     expect(sawLimit).toBe(true);
+  });
+
+  it("rate-limits password-reset requests from one IP", async () => {
+    // The forgot-password limiter allows 5 requests / 10 minutes per IP.
+    let sawLimit = false;
+    for (let i = 0; i < 8; i += 1) {
+      const res = await fetch(`${server.url}/api/auth/password/forgot`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ email: `ratelimit-${i}@example.test` }),
+      });
+      if (res.status === 429) {
+        sawLimit = true;
+        break;
+      }
+    }
+    expect(sawLimit).toBe(true);
+  });
+
+  it("enforces CSRF on the change-password endpoint", async () => {
+    // Session cookie present, but the double-submit CSRF token omitted.
+    const res = await fetch(`${server.url}/api/auth/password/change`, {
+      method: "POST",
+      headers: { "content-type": "application/json", cookie: headerFor(alice) },
+      body: JSON.stringify({ currentPassword: "does-not-matter", newPassword: "New-pass-12345" }),
+    });
+    expect(res.status).toBe(403);
   });
 
   it("rejects malformed JSON with a structured 400", async () => {
