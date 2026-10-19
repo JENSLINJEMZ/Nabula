@@ -70,9 +70,10 @@ Every non-2xx JSON response:
 | `RATE_LIMITED` | 429 | Rate limit hit (`details.retryAfterMs` for per-webhook / per-command buckets) |
 | `SLOWMODE_ACTIVE` | 429 | Channel slowmode active |
 | `INTERNAL` | 500 | Unhandled error (never leaks internals) |
-| `UPSTREAM_UNAVAILABLE` | 503 | A required dependency (DB/Redis/storage/mail) is unavailable |
+| `MAIL_NOT_CONFIGURED` | 503 | Email flow requested but no SMTP relay is configured in production (`SMTP_URL` / `SMTP_HOST` unset) |
+| `UPSTREAM_UNAVAILABLE` | 503 | A required dependency (DB/Redis/storage) is unavailable |
 
-> **Not built (documented):** `INVALID_SIGNATURE` (webhook HMAC), `FEATURE_NOT_IMPLEMENTED` (501), `MAIL_NOT_CONFIGURED` (503) and `STORAGE_UNAVAILABLE` (503) do not exist in the running server. Webhooks use a bearer URL token only (no request signing); email flows are not implemented.
+> **Not built (documented):** `INVALID_SIGNATURE` (webhook HMAC) and `FEATURE_NOT_IMPLEMENTED` (501) do not exist in the running server. Webhooks use a bearer URL token only (no request signing). Email flows are implemented (see §2.1) and fail safely with `MAIL_NOT_CONFIGURED` when SMTP is not configured in production.
 
 ---
 
@@ -82,20 +83,33 @@ Legend for **Auth**: `public` (no session), `session` (any authenticated user), 
 
 ### 2.1 Auth & sessions
 
+Implemented routes (milestone 1 account security included). All mutating routes require the double-submit CSRF token.
+
 | Method | Path | Auth | Request | Response |
 | --- | --- | --- | --- | --- |
-| `POST` | `/auth/register` | public | `{ email, username, password }` | `201` `{ user, session }` + sets cookies |
-| `POST` | `/auth/login` | public | `{ email?, username?, password }` | `200` `{ user, session }` + sets cookies |
-| `POST` | `/auth/logout` | session | `{}` | `204` (revokes current session, clears cookies) |
-| `GET` | `/auth/sessions` | session | — | `{ items: [{ id, device_name, user_agent, ip_hash?, created_at, last_seen_at, current }] }` |
-| `DELETE` | `/auth/sessions/{session_id}` | session | — | `204` |
-| `POST` | `/auth/sessions/revoke-all` | session | — | `204` (revokes all others) |
-| `PATCH` | `/auth/password` | session | `{ current_password, new_password }` | `204` (revokes other sessions) |
-| `POST` | `/auth/password/reset/request` | public | `{ email }` | `202` normally; `503 MAIL_NOT_CONFIGURED` when SMTP unset. Always `202` for unknown email (no enumeration). |
-| `POST` | `/auth/password/reset/confirm` | public | `{ token, new_password }` | `204` |
-| `POST` | `/auth/verify-email` | public | `{ token }` | `204` / `503 MAIL_NOT_CONFIGURED` |
+| `POST` | `/api/auth/register` | public | `{ username, password, email?, displayName?, inviteCode? }` | `201` `{ user, csrfToken }` + sets cookies (sends a verification email when `email` is present and SMTP is available) |
+| `POST` | `/api/auth/login` | public | `{ username, password }` | `200` `{ user, csrfToken }` + cookies, **or** `200 { mfaRequired: true, challengeToken }` when 2FA is enabled (no session yet) |
+| `POST` | `/api/auth/login/2fa` | public | `{ challengeToken, code? \| recoveryCode? }` | `200` `{ user, csrfToken, usedRecoveryCode }` + cookies |
+| `POST` | `/api/auth/logout` | session | — | `204` (revokes the current session, clears cookies, drops its socket) |
+| `GET` | `/api/auth/me` | session | — | `{ user }` (`mfaEnabled`, `emailVerified` included) |
+| `GET` | `/api/auth/sessions` | session | — | `{ sessions: [{ id, createdAt, lastSeenAt, clientName, ip, userAgent, current }] }` |
+| `DELETE` | `/api/auth/sessions/{session_id}` | session | — | `204` (revokes that session and force-disconnects its socket) |
+| `POST` | `/api/auth/logout-all` | session | — | `204` (revokes every session including the current one) |
+| `POST` | `/api/auth/password/change` | session | `{ currentPassword, newPassword }` | `200` `{ ok, revokedSessions }` (revokes every *other* session) |
+| `POST` | `/api/auth/email/verify-request` | session | — | `202` `{ ok }` (resends verification; `MAIL_NOT_CONFIGURED` in production without SMTP) |
+| `POST` | `/api/auth/email/verify` | public | `{ token }` | `200` `{ ok, user? }` (`400 TOKEN_INVALID` for invalid/expired/used) |
+| `POST` | `/api/auth/password/forgot` | public | `{ email }` | `202` `{ ok, message }` — identical response for known/unknown addresses (no enumeration) |
+| `POST` | `/api/auth/password/reset` | public | `{ token, newPassword }` | `200` `{ ok }` (consumes the token, revokes **all** sessions) |
+| `POST` | `/api/auth/2fa/enroll` | session | `{ password }` | `200` `{ secret, uri, qrDataUrl }` (password re-auth; replaces any pending enrollment) |
+| `POST` | `/api/auth/2fa/enroll/cancel` | session | — | `204` (abandons a pending enrollment) |
+| `POST` | `/api/auth/2fa/activate` | session | `{ code }` | `200` `{ ok, recoveryCodes: string[10] }` (verifies a code before enabling; codes shown once) |
+| `POST` | `/api/auth/2fa/disable` | session | `{ password, code? \| recoveryCode? }` | `200` `{ ok }` |
+| `POST` | `/api/auth/2fa/recovery-codes` | session | `{ password, code? \| recoveryCode? }` | `200` `{ recoveryCodes }` (replaces existing codes) |
+| `GET` | `/api/auth/2fa` | session | — | `{ mfaEnabled, recoveryCodesRemaining }` |
 
-**Validation (register/login):** email (RFC-ish, ≤254), username (2–32; no `@ # :` / triple-backtick / `discord`; not `everyone`/`here`) **[VERIFIED]**, password (12–128 chars, zxcvbn-style strength advisory). Password hashed with `scrypt` N=2^15, r=8, p=1, per-user 32-byte salt, 64-byte key. **[DESIGN]**
+**Validation (register/login):** email (RFC-ish, ≤254), username (2–32; no `@ # :` / triple-backtick / `discord`; not `everyone`/`here`) **[VERIFIED]**, password (8–200 chars via the shared `validatePassword`). Password hashed with `scrypt` (per-user salt); see §3.1 of the Security Model. **[VERIFIED]**
+
+**Rate limits:** login `20/min`, register `15/min`, change-password `5/min`, verify-request `3/5min`, email-verify `10/5min`, forgot `5/10min`, reset `10/10min`, 2FA enroll/disable `10/5min`, 2FA recovery `5/5min`, login/2fa `10/5min` (all per IP).
 
 ### 2.2 Users & profiles
 

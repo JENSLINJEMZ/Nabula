@@ -57,6 +57,9 @@ docker compose up -d
 npm install
 
 # 3. Config — copy the template and set a real SESSION_SECRET
+#    (TOTP_ENCRYPTION_KEY is required and must differ from SESSION_SECRET;
+#     set SMTP_URL — or SMTP_HOST/SMTP_PORT/SMTP_USER/SMTP_PASS — only if you
+#     have real mail credentials; otherwise dev/test capture .eml files)
 cp .env.example apps/server/.env
 
 # 4. Schema + demo data (a guild, three users, a few messages)
@@ -76,9 +79,9 @@ Seeded users: `nebula_alice` (guild owner), `nebula_bob`, `nebula_carol`. Their 
 
 ```bash
 npm run typecheck     # tsc --noEmit across all workspaces
-npm test              # shared unit (18) + server integration (69)
+npm test              # shared unit (18) + server integration (86)
 npm run build         # production web bundle
-npm run test:e2e      # Playwright (30 + 2 auth setup) — requires the dev stack + seeded DB running
+npm run test:e2e      # Playwright (33 + 2 auth setup) — requires the dev stack + seeded DB running
 ```
 
 The server integration suite boots the **real** Fastify + Socket.IO stack against an isolated `nebula_test` database — the same routing, auth, CSRF, and permission code that production runs.
@@ -89,6 +92,19 @@ The server integration suite boots the **real** Fastify + Socket.IO stack agains
 
 - **Slash commands** — type `/` in a channel to autocomplete the built-in registry: `/ping /help /shrug /me /user /server /nick /slowmode /timeout /poll /topic`. Informational commands reply ephemerally (only you see them); `/shrug`, `/me` and `/poll` post to the channel. Permissions are enforced (`/timeout`, `/slowmode`, `/topic`, `/nick`), invalid arguments and missing permissions are reported inline, and invocations are rate-limited + idempotent. API: `GET /api/commands?guildId=…`, `POST /api/interactions`.
 - **Incoming webhooks** — manage them in **Channel settings → Integrations**: create (the URL token is shown **once**), send a test, rotate (new token once), disable/enable, set an avatar, delete, and inspect delivery history. Deliver with `POST /api/webhooks/{webhookId}/{token}` and body `{"content": "…"}` (optional `X-Idempotency-Key`). The token is a **bearer credential stored only as a SHA-256 hash** — there is no HMAC request signing, delivery cannot be redirected to another channel, embeds are never fetched outbound (no SSRF), and each webhook is limited to 30 deliveries / 10 s. Webhook lifecycle changes are written to the guild audit log.
+
+## Account security & email
+
+Settings → **Security** covers the full account-security surface:
+
+- **Change password** — requires the current password; signs out every *other* device.
+- **Email verification** — request/resend from the Security tab; verify via the emailed `/verify-email?token=…` link.
+- **Two-factor (TOTP)** — password re-auth to start, then QR **or** manual key; activation verifies a live code first and shows **10 recovery codes once**. Login then asks for a code (or a recovery code). Disable and regeneration both require password + factor.
+- **Active sessions** — device list with creation/last-active/current, revoke one, or log out everywhere. A revoked session loses access over HTTP **and** is disconnected from Socket.IO in real time.
+
+**Email delivery:** the server uses nodemailer when a relay is configured — either `SMTP_URL=smtp://user:pass@host:587`, or `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS` — plus optional `SMTP_FROM` (see `resolveSmtpSettings()` in `apps/server/src/config.ts` for the precedence). In development/test, and whenever no relay is configured outside production, each message is captured as an `.eml` file under `MAIL_DEV_DIR` (default `./data/mail`) — this is the local testing method used by the e2e suite, and tokens are never printed to logs or responses. The test and e2e suites blank every `SMTP_*` variable, so they never touch a real relay. In production with no relay configured the endpoints return `503 MAIL_NOT_CONFIGURED` instead of pretending a mail was sent.
+
+**TOTP encryption:** secrets are encrypted at rest (AES-256-GCM) with `TOTP_ENCRYPTION_KEY`, which is required in every environment (≥32 chars) and must differ from `SESSION_SECRET`; startup validation refuses to boot otherwise.
 
 ## Documentation
 

@@ -54,21 +54,39 @@ E2E voice content confidentiality (DTLS-SRTP only), malicious server operators (
 - Rationale: scrypt is memory-hard (resists GPU/ASIC cracking) and available in `node:crypto` with no native dependency. Argon2id would be preferable but adds a build dependency; this trade-off is explicit.
 - **Caveat:** N=2^15 uses ~32 MiB per verification; login/register routes are rate-limited to prevent memory-exhaustion DoS via parallel hashing.
 
-### 3.2 Sessions **[DESIGN]**
+### 3.2 Sessions **[VERIFIED]**
 - On login/register the server generates a **32-byte random** opaque token; only its **SHA-256 hash** is stored (`sessions.token_hash`). The raw token is the cookie value and is never logged or stored.
 - Cookie `nebula_session`: `HttpOnly`, `SameSite=Lax`, `Secure` when `COOKIE_SECURE=true` (default in prod), `Path=/`, `Max-Age = SESSION_TTL_DAYS`.
-- Session rows carry `expires_at`, `revoked_at`, `last_seen_at`, and optional `device_id`/`user_agent`/hashed IP.
-- Logout revokes the current session; changing the password revokes all others; "log out everywhere" revokes all.
+- Session rows carry `expires_at`, `revoked_at`, `last_seen_at`, `client_name`, `user_agent`, and `ip`.
+- Logout revokes the current session; changing the password revokes all others; a password reset revokes **all** sessions; "log out everywhere" revokes all.
+- **Session management UI/API:** `GET /api/auth/sessions` lists sessions with creation time, last activity, client name, and a `current` flag; `DELETE /api/auth/sessions/{id}` revokes one; `POST /api/auth/logout-all` revokes every session including the current one. No raw session token or unhashed device data is ever returned.
+- **Realtime revocation:** revoked sessions stop working for HTTP *and* Socket.IO. The gateway registers each live socket against its session id (`realtime/sessionSockets.ts`); revoking a session emits a `SESSION_REVOKED` event to that socket and disconnects it.
 - **Fixation:** a new token is issued on login (never reuse a pre-login token).
-- **Idle vs absolute expiry:** slice uses absolute expiry with sliding `last_seen_at`; sliding TTL is a documented option.
-- Expired/revoked sessions are rejected at hydration and cleaned up by a worker.
+- **Idle vs absolute expiry:** the slice uses absolute expiry with sliding `last_seen_at`.
+- Expired/revoked sessions are rejected at hydration.
+- **Limitation:** the socket registry is in-process, so session revocation propagates within a single node only. A multi-node deployment needs a shared (e.g. Redis adapter) registry; documented gap.
 
-### 3.3 Multi-factor
-- `users.mfa_enabled` and `guilds.mfa_level` exist for the documented 2FA-gated permission set. TOTP enrollment is **[DESIGN OPEN]**; the slice may ship the flag/gating without full enrollment. This is documented, not faked as "2FA enabled".
+### 3.3 Multi-factor (TOTP) **[VERIFIED]**
+- TOTP via the maintained `otplib` library (RFC 6238): SHA-1, 6 digits, 30 s period, ±30 s tolerance on verification.
+- **Enrollment:** requires password re-authentication. `POST /api/auth/2fa/enroll` (password) returns the secret, an `otpauth://` URI, and a QR data-URL for the UI; the secret is *pending* until `POST /api/auth/2fa/activate` verifies a live code. Activating returns the initial set of recovery codes (shown once). A pending enrollment can be abandoned with `/2fa/enroll/cancel`.
+- **Disable / regenerate require re-authentication:** `POST /api/auth/2fa/disable` and `/2fa/recovery-codes` both require the account password and a valid TOTP code *or* recovery code.
+- **Secret at rest:** the TOTP secret is encrypted with **AES-256-GCM** keyed by `TOTP_ENCRYPTION_KEY`, a dedicated server-side secret that is required in *every* environment (≥32 chars) and must differ from `SESSION_SECRET`. Stored in `users.mfa_secret_enc`; the plaintext secret is never logged.
+- **Login flow:** when 2FA is enabled, password verification returns `200 { mfaRequired: true, challengeToken }` **without** issuing a session. The client completes login via `POST /api/auth/login/2fa` with either a `code` or a `recoveryCode`. Challenges are single-use (`mfa_challenges.used_at`), expire after 5 minutes, and store only the SHA-256 of the challenge token. A wrong factor does **not** consume the challenge (a typo does not lock the user out) but is rate-limited; a successful factor consumes it.
+- **Recovery codes:** 10 codes generated from a CSPRNG, stored as SHA-256 hashes (`totp_recovery_codes`), single-use, and displayed only at generation/regeneration time.
+- Guild-wide `guilds.mfa_level` permission gating is a **separate** feature and remains unbuilt (see feature matrix); `users.mfa_enabled` is now written by real enrollment.
 
-### 3.4 Registration & enumeration
+### 3.4 Email verification & password reset **[VERIFIED]**
+- **Tokens:** 32-byte random value; only the SHA-256 is stored (`email_tokens.token_hash`); single-use (`used_at`); expiring (`verify_email` 24 h, `reset_password` 1 h); lookups indexed by `(user_id, type)`.
+- **Delivery:** nodemailer when a relay is configured — `SMTP_URL`, or `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS` (see `resolveSmtpSettings()` in `config.ts` for the precedence: the URL decides host/port, discrete credentials fill in only when the URL has none). In development/test (and when no relay is configured outside production) messages are captured as `.eml` files under `MAIL_DEV_DIR` — the documented local test method. Tokens are never written to logs or API responses, and the transport options (which hold the SMTP password) are never logged.
+- **Test isolation:** the vitest and Playwright configs blank every `SMTP_*` variable, so a developer's local relay can never receive suite/e2e mail — the suites always use the disk capture.
+- **Production fail-safe:** with no relay the server still boots but logs a warning, and the mail-sending endpoints return `503 MAIL_NOT_CONFIGURED` rather than pretending an email was sent.
+- **No enumeration:** `POST /api/auth/password/forgot` returns the same `202` body for known and unknown addresses; unknown addresses perform no work and leak no timing signal beyond the response.
+- **Reset invalidates sessions:** a successful reset consumes the token and revokes **all** of the user's sessions (anti-replay).
+- Verification resend (`POST /api/auth/email/verify-request`) is session-authenticated and rate-limited (`3/5min`).
+
+### 3.5 Registration & enumeration
 - Login failures always return `401 INVALID_CREDENTIALS` with the same message and comparable timing regardless of whether the username/email exists (dummy hash comparison on miss to equalize timing).
-- Registration may reveal username/email existence via `409 CONFLICT` (a usability trade-off). This is acknowledged; the alternative (silent "check your email") requires email infrastructure we do not have.
+- Registration may reveal username/email existence via `409 CONFLICT` (a usability trade-off). This is acknowledged; the alternative (silent "check your email") would require email infrastructure in every deployment, which is optional here.
 
 ---
 
@@ -179,7 +197,7 @@ can(user, action, target):
 - Lifecycle changes are recorded in the guild audit log (create=50, update/rotate/disable=51, delete=52). **[VERIFIED: integration + e2e]**
 
 ### 10.2 Secret management
-- Required secrets come from env (`SESSION_SECRET`, DB/Redis credentials, optional `SMTP_URL`, storage credentials). `.env.example` documents them; `.env` is git-ignored.
+- Required secrets come from env (`SESSION_SECRET`, DB/Redis credentials, optional SMTP credentials (`SMTP_URL` and/or `SMTP_USER`/`SMTP_PASS`), storage credentials). `.env.example` documents them; `.env` is git-ignored.
 - The server **refuses to boot** if `SESSION_SECRET` is missing/weak in production (`< 32 bytes` entropy check).
 - No secrets are committed; no secrets logged; no secrets returned by any API after creation-time display (session tokens, webhook tokens, signing secrets).
 - Rotation: `SESSION_SECRET` rotation invalidates sessions unless key-versioned; documented.

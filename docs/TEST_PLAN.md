@@ -321,24 +321,25 @@ S1/S2 block a milestone exit. S3/S4 are tracked but may ship with a documented l
 
 | Suite | Location | Tests | Result |
 | --- | --- | --- | --- |
-| Suite | Location | Tests | Result |
-| --- | --- | --- | --- |
 | Shared unit | `packages/shared/test/{permissions,snowflake}.test.ts` | 18 | **18/18 pass** |
 | Server integration — journeys | `apps/server/test/journeys.test.ts` | 13 | **13/13 pass** |
-| Server integration — security | `apps/server/test/security.test.ts` | 14 | **14/14 pass** |
+| Server integration — security | `apps/server/test/security.test.ts` | 16 | **16/16 pass** |
+| Server integration — account security | `apps/server/test/account-security.test.ts` | 15 | **15/15 pass** |
 | Server integration — threads | `apps/server/test/threads.test.ts` | 4 | **4/4 pass** |
 | Server integration — forwarding | `apps/server/test/forwarding.test.ts` | 9 | **9/9 pass** |
 | Server integration — group DMs | `apps/server/test/group-dms.test.ts` | 8 | **8/8 pass** |
 | Server integration — slash commands | `apps/server/test/commands.test.ts` | 9 | **9/9 pass** |
 | Server integration — webhooks | `apps/server/test/webhooks.test.ts` | 12 | **12/12 pass** |
+| Server unit — SMTP relay resolution | `apps/server/test/smtp-config.test.ts` | 9 | **9/9 pass** |
 | Browser e2e — core journeys | `apps/web/e2e/app.spec.ts` | 7 | **7/7 pass** |
 | Browser e2e — realtime & social | `apps/web/e2e/realtime.spec.ts` | 4 | **4/4 pass** |
 | Browser e2e — routing | `apps/web/e2e/routing.spec.ts` | 4 | **4/4 pass** |
 | Browser e2e — slash commands | `apps/web/e2e/slash-commands.spec.ts` | 4 | **4/4 pass** |
 | Browser e2e — webhooks | `apps/web/e2e/webhooks.spec.ts` | 8 | **8/8 pass** |
 | Browser e2e — forwarding/DMs/threads | `apps/web/e2e/{forwarding,group-dms,threads}.spec.ts` | 3 | **3/3 pass** |
+| Browser e2e — account security | `apps/web/e2e/account-security.spec.ts` | 3 | **3/3 pass** |
 | Browser e2e — auth setup | `apps/web/e2e/auth.setup.ts` | 2 | **2/2 pass** |
-| **Total** | | **119** | **119/119 pass** |
+| **Total** | | **148** | **148/148 pass** |
 
 Static gates (also executed): `npm run typecheck` (3 workspaces clean) and `npm run build` (production bundle produced).
 
@@ -350,6 +351,8 @@ Static gates (also executed): `npm run typecheck` (3 workspaces clean) and `npm 
 
 Salted-scrypt storage; hardened session cookies (HttpOnly/SameSite=Lax); CSRF rejection; cross-user message IDOR; media path-traversal; upload magic-byte mismatch; search access-scoping (no cross-guild leak); invite use limits; indistinguishable login errors; self-ban prevention; login rate limiting; malformed-JSON 400; unauthenticated username search rejected; username search returns no private fields.
 
+Milestone 1 additions (`account-security.test.ts`, `security.test.ts`): password change requires the current password and revokes **other** sessions while keeping the caller signed in; email-verification tokens are single-use and expire (`400 TOKEN_INVALID`); resend is rate-limited; forgot-password returns an identical `202` for known and unknown addresses (no enumeration); reset is single-use, revokes **all** sessions, and rejects replay; TOTP enrollment requires password re-auth and will not activate on a wrong code; disable/regenerate require re-auth; recovery codes are CSPRNG-generated (10), stored hashed, and single-use; the login second-factor challenge is single-use yet **not** consumed by a wrong code; account-security endpoints enforce CSRF and per-route rate limits (forgot `5/10min`, login/2fa `10/5min`, change `5/min`); revoking a session returns it to `401` and disconnects its socket.
+
 ### 14.4 Deviations from the original plan (as built)
 
 - **Integration isolation:** the plan proposed per-run `CREATE DATABASE`. Implemented as a single `nebula_test` database with `fileParallelism: false` / `singleFork: true`, so runs are serial and deterministic.
@@ -360,14 +363,20 @@ Salted-scrypt storage; hardened session cookies (HttpOnly/SameSite=Lax); CSRF re
 - **Earlier cycle:** browser specs for client routing (deep links, back/forward, 404), threads (create/post/close/deep-link), and group DMs (create, realtime sidebar update, message delivery, leave-closes-group).
 - **This cycle — slash commands & webhooks:** 9 integration tests for first-party slash commands (`apps/server/test/commands.test.ts`: registry metadata, argument validation, permission gating incl. unauthorized `/topic`, idempotent invocation, ephemeral vs posted results) and 12 for webhooks (`apps/server/test/webhooks.test.ts`: create/rotate/disable/delete, token hashing + non-exposure, bound-channel enforcement, idempotency, per-webhook rate limit, audit entries 50/51/52). Browser specs `apps/web/e2e/slash-commands.spec.ts` (4: autocomplete + keyboard selection, execute + results, invalid-argument + permission-denied responses, poll creation/interaction + topic change) and `apps/web/e2e/webhooks.spec.ts` (8: UI lifecycle create→rotate→disable/enable→delete, authenticated delivery appearing exactly once with idempotency + realtime, invalid-secret rejection, revoked/disabled non-delivery, secret non-exposure in API + logs, rate limit, unauthorized management, SSRF/redirect rejection).
 - **Config fix this cycle:** `RATE_LIMIT_MAX` was attached to the Vite web-server entry instead of the **API** server entry in `apps/web/playwright.config.ts`, so the API ran at the 600/min default and self-throttled the later specs. The API server now starts with `RATE_LIMIT_MAX=5000` for the E2E run.
+- **Milestone 1 — account security (2026-10-19):** 15 integration tests (`apps/server/test/account-security.test.ts`) cover change password, email verification (valid/expired/used tokens), resend, forgot/reset (no enumeration, single-use, session invalidation, replay rejection), TOTP enroll/activate/disable, recovery-code generation/consumption, and the second-factor login challenge. `security.test.ts` gained rate-limit coverage for forgot-password and a CSRF assertion for the change-password endpoint (now 16 tests). Three browser specs (`apps/web/e2e/account-security.spec.ts`) drive the real UI: verify-email → change password → re-login; forgot → reset via the captured `.eml` link → login; and TOTP enable → TOTP login → recovery-code login. Email is read from the server's disk capture (`MAIL_DEV_DIR`) — there is **no mock and no real SMTP**. The spec computes TOTP locally (RFC 6238) so it does not depend on the server's library.
+
+- **SMTP configuration & isolation (2026-10-19):** `apps/server/test/smtp-config.test.ts` (9 unit tests) pins down `resolveSmtpSettings()` — URL-only, discrete-variables-only, precedence when both are present (URL decides host/port; discrete credentials fill in only when the URL carries none), `smtps`/465 implicit TLS, default ports, percent-encoded credentials, and `null` when nothing is configured — plus a regression guard asserting that **no** relay resolves while suites run. Root cause fixed: `apps/server/.env` was loaded into the test and e2e processes, so suite mail bypassed the `.eml` capture (6 of 15 account-security tests failed, and a configured relay would have received suite mail). The vitest and Playwright configs now blank every `SMTP_*` variable, and `config.ts` treats a blank value as unset (`SMTP_URL=` also disables delivery instead of failing validation). Real delivery was verified separately through the real routes against the configured relay (`register` → `201` + relay accepted, `verify-request` → `202` + relay accepted); that check is manual because it needs live credentials and is deliberately not part of the suite.
+
+> **Test-only env note:** `security.test.ts` enables the limiter via `RATE_LIMIT_DISABLED=false` and now **restores** it to `true` in `afterAll` so the setting does not leak into other files that share the worker process (each file boots its own server and re-parses env).
 
 ### 14.5 Commands
 
 ```bash
 npm run typecheck       # 3 workspaces
-npm test                # shared (18) + server (69)
+npm test                # shared (18) + server (95)
 npm run build           # web bundle
-npm run test:e2e        # Playwright (30 + 2 auth setup) — dev stack + seeded DB must be running
+npm run test:e2e        # Playwright (33 + 2 auth setup) — dev stack + seeded DB must be running
+npm run db:migrate      # applies 0001–0006 (forward-only)
 ```
 
-> The E2E config starts the **API** server with `RATE_LIMIT_MAX=5000` so the global limiter does not throttle later specs. If you run against a manually started API server, export that variable yourself.
+> The E2E config starts the **API** server with `RATE_LIMIT_MAX=5000` so the global limiter does not throttle later specs. If you run against a manually started API server, export that variable yourself. The same is true of the mail variables: the e2e config blanks `SMTP_URL`/`SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS` so account-security specs read the `.eml` capture — a manually started API server must have them blanked too (any non-empty value routes mail to that relay instead).

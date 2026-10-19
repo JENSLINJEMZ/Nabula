@@ -46,14 +46,18 @@
 | Timed-out member permission effect | Permissions | Computation, moderation | Verified | Unverified | Verified (unit) | Owner/ADMIN exempt |
 | Permission hierarchy (position-gated management) | Permissions | Roles | Verified | Verified | Verified (integration J6) | Applies to actions, not resolution |
 | Category permission syncing | Permissions | Overwrites, categories | Unverified | Partial | Unverified | Overwrites implemented; auto-sync semantics not asserted |
-| Register account | Auth | Users, credentials | Verified | Verified | Verified (integration + e2e) | No email verification (no mail infra) |
-| Login / logout | Auth | Sessions | Verified | Verified | Verified (integration + e2e) | — |
+| Register account | Auth | Users, credentials | Verified | Verified | Verified (integration + e2e) | Optional email triggers verification |
+| Login / logout | Auth | Sessions | Verified | Verified | Verified (integration + e2e) | 2FA challenge step when enabled |
 | Server-side sessions (Postgres-backed, opaque cookie) | Auth | Redis/PG | Verified | Verified | Verified (integration + e2e) | Session store is DB |
 | scrypt password hashing (N=2^15,r=8,p=1, per-user salt) | Auth | — | Verified | n/a | Verified (integration) | Memory-heavy; documented |
 | CSRF double-submit protection | Auth | Sessions | Verified | n/a | Verified (integration) | Cookie+header pair required |
-| Session/device list + revoke + "log out everywhere" | Auth | Sessions | Verified | Verified | Verified (integration + e2e) | Device naming approximated from UA |
-| Change password | Auth | Sessions | Not built | Not built | n/a | No route, no UI |
-| Email verification / password reset | Auth | SMTP | Out of scope | Not built | n/a | Returns `MAIL_NOT_CONFIGURED`; never simulated |
+| Session/device list + revoke + "log out everywhere" | Auth | Sessions | Verified | Verified | Verified (integration + e2e) | Device naming approximated from UA; revocation disconnects the socket |
+| Change password | Auth | Sessions | Verified | Verified | Verified (integration + e2e) | Requires current password; revokes other sessions |
+| Email verification / password reset | Auth | SMTP | Verified | Verified | Verified (integration + e2e) | Tokens hashed/single-use/expiring; prod needs an SMTP relay (`SMTP_URL` or `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`; `MAIL_NOT_CONFIGURED` otherwise); dev/test capture `.eml` |
+| TOTP two-factor authentication (enroll/activate/disable) | Auth | `otplib`, `TOTP_ENCRYPTION_KEY` | Verified | Verified | Verified (integration + e2e) | Password re-auth required; secret AES-256-GCM at rest; ±30 s tolerance |
+| TOTP recovery codes | Auth | TOTP | Verified | Verified | Verified (integration + e2e) | 10 codes; CSPRNG; SHA-256 at rest; single-use; shown once |
+| Second-factor login challenge | Auth | TOTP | Verified | Verified | Verified (integration + e2e) | Single-use, 300 s TTL, non-consuming on wrong code; rate-limited |
+| Account security audit events | Auth | `security_events` | Verified | Unverified | Verified (integration) | Account-scoped; not surfaced in a UI |
 | Account deactivation/delete | Auth | Sessions, FK policies | Not built | Not built | n/a | Deletion policy documented only |
 | Public user object + profile view | Users | — | Verified | Verified | Verified (integration + e2e) | Private fields omitted |
 | Edit own profile (display name, about, accent) | Users | — | Verified | Verified | Unverified | — |
@@ -90,7 +94,7 @@
 | Role ordering + hierarchy gating | Roles | Roles | Verified | Verified | Verified (integration J6) | Cannot manage roles above your highest |
 | Member role assignment/removal | Roles | Roles, members | Verified | Verified | Verified (integration J3) | Cannot grant perms you lack |
 | Role appearance (color/hoist/mentionable) | Roles | Roles | Verified | Verified | Unverified | Hoisted roles group the member list |
-| Guild-wide 2FA-required permission gating | Roles | Sessions | Not built | Not built | n/a | `mfaEnabled` is always false; no enrollment |
+| Guild-wide 2FA-required permission gating | Roles | Sessions | Not built | Not built | n/a | Per-user TOTP enrollment now exists; guild-level `mfa_level` gating still unbuilt |
 | Send message | Messaging | Channels, snowflake | Verified | Verified | Verified (integration J4 + e2e) | ≤2000 chars |
 | Edit / delete message | Messaging | Messaging | Verified | Verified | Verified (integration J5 + e2e) | Author-or-manage; IDOR-tested |
 | Reply | Messaging | Messaging | Verified | Verified | Verified (integration J5) | `message_reference` |
@@ -178,10 +182,10 @@ Foundation (monorepo, config, IDs, errors, DB/Redis, logging)
 
 ## Reconciliation summary
 
-- **Verified end-to-end (server + browser):** auth/sessions, permissions, guilds/roles/channels/overwrites, text messaging (send/edit/delete/reply/react/pin/typing/search/markdown/mentions), friends/blocks, DMs, **group DMs with participant management**, **threads**, **client-side routing (deep links/history/404)**, **first-party slash commands (autocomplete/execute/ephemeral results/polls/topic)**, **incoming webhooks (lifecycle UI + delivery/security)**, media upload + authorized access, moderation, realtime, and **audio** voice.
+- **Verified end-to-end (server + browser):** auth/sessions, **account security (email verification, password reset, change password, TOTP 2FA + recovery codes, per-session revocation)**, permissions, guilds/roles/channels/overwrites, text messaging (send/edit/delete/reply/react/pin/typing/search/markdown/mentions), friends/blocks, DMs, **group DMs with participant management**, **threads**, **client-side routing (deep links/history/404)**, **first-party slash commands (autocomplete/execute/ephemeral results/polls/topic)**, **incoming webhooks (lifecycle UI + delivery/security)**, media upload + authorized access, moderation, realtime, and **audio** voice.
 - **Backend exists, no UI (labelled "Verified (routes) / Not built"):** message purge, avatar/icon upload.
-- **Not built:** camera video, screen share, server mute/deafen/move UI, change password, account delete, channel reorder, webhook HMAC request signing, thumbnails, per-channel notification overrides, OS notifications, light theme, 2FA enrollment, CI config, production containers, load tests.
-- **Blocked:** TURN (cross-NAT voice); mail infra (verification/reset); multi-node realtime (Redis adapter); TLS termination.
-- **Out of scope (documented):** voice E2E encryption, SFU, push, auto-mod, raid detection, third-party bots/OAuth2, email verification/reset.
+- **Not built:** camera video, screen share, server mute/deafen/move UI, account delete, channel reorder, webhook HMAC request signing, thumbnails, per-channel notification overrides, OS notifications, light theme, guild-level 2FA-required gating, CI config, production containers, load tests.
+- **Integration present, external infra required to go live:** outbound email (implemented; configure an SMTP relay in production — `SMTP_URL` or `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS` — otherwise `MAIL_NOT_CONFIGURED`); multi-node realtime (socket-based session revocation is single-node); TURN (cross-NAT voice); TLS termination.
+- **Out of scope (documented):** voice E2E encryption, SFU, push, auto-mod, raid detection, third-party bots/OAuth2.
 
 See [FINAL_ACCEPTANCE_REPORT.md](./FINAL_ACCEPTANCE_REPORT.md) for evidence and reproduction commands.

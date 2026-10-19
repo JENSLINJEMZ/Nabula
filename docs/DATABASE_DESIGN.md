@@ -112,8 +112,10 @@ Not all FK links are drawn (to keep the diagram legible); the authoritative list
 | `bot` | `BOOLEAN` | NOT NULL DEFAULT false | |
 | `system` | `BOOLEAN` | NOT NULL DEFAULT false | |
 | `flags` | `BIGINT` | NOT NULL DEFAULT 0 | bitfield |
-| `mfa_enabled` | `BOOLEAN` | NOT NULL DEFAULT false | |
-| `verified` | `BOOLEAN` | NOT NULL DEFAULT false | always false in slice (no email) |
+| `mfa_enabled` | `BOOLEAN` | NOT NULL DEFAULT false | flipped true only after a TOTP code is confirmed (milestone 1) |
+| `mfa_secret_enc` | `TEXT` | NULL | AES-256-GCM-encrypted TOTP secret; NULL until enrollment |
+| `mfa_enrolled_at` | `TIMESTAMPTZ` | NULL | when 2FA was activated |
+| `email_verified` | `BOOLEAN` | NOT NULL DEFAULT false | flipped true by the email-verification flow |
 | `locale` | `TEXT` | NOT NULL DEFAULT `'en-US'` | i18n readiness |
 | `last_known_presence` | `TEXT` | NOT NULL DEFAULT `'offline'` | Redis fallback |
 | `created_at` | `TIMESTAMPTZ` | NOT NULL DEFAULT now() | |
@@ -162,6 +164,60 @@ Not all FK links are drawn (to keep the diagram legible); the authoritative list
 
 - **Unique:** `UNIQUE (token_hash)`.
 - **Indexes:** `idx_sessions_user (user_id, expires_at DESC)`; `idx_sessions_expires (expires_at)` (cleanup); partial `idx_sessions_active ON sessions(user_id) WHERE revoked_at IS NULL`.
+
+#### Milestone 1 — account-security tables (`0006_account_security.sql`)
+
+Forward-only migration; adds MFA state to `users` and three new tables. It does not rewrite or delete existing rows.
+
+**`users` additions**
+
+| Column | Type | Constraints | Notes |
+| --- | --- | --- | --- |
+| `mfa_enabled` | `BOOLEAN` | NOT NULL DEFAULT FALSE | (already existed; now written by real enrollment) |
+| `mfa_secret_enc` | `TEXT` | NULL | AES-256-GCM ciphertext of the TOTP secret (see Security Model §3.3) |
+| `mfa_enrolled_at` | `TIMESTAMPTZ` | NULL | set when activation succeeds |
+
+**`totp_recovery_codes`** — single-use 2FA recovery codes; only hashes are stored.
+
+| Column | Type | Constraints | Notes |
+| --- | --- | --- | --- |
+| `id` | `BIGINT` | PK | snowflake |
+| `user_id` | `BIGINT` | NOT NULL, FK → `users(id)` ON DELETE CASCADE | |
+| `code_hash` | `TEXT` | NOT NULL, UNIQUE | SHA-256 of the 10-char code |
+| `used_at` | `TIMESTAMPTZ` | NULL | non-null ⇒ consumed |
+| `created_at` | `TIMESTAMPTZ` | NOT NULL DEFAULT now() | |
+
+- **Indexes:** partial `totp_recovery_codes_user_idx (user_id) WHERE used_at IS NULL`.
+
+**`mfa_challenges`** — short-lived challenges between password login and second factor.
+
+| Column | Type | Constraints | Notes |
+| --- | --- | --- | --- |
+| `id` | `BIGINT` | PK | snowflake |
+| `user_id` | `BIGINT` | NOT NULL, FK → `users(id)` ON DELETE CASCADE | |
+| `token_hash` | `TEXT` | NOT NULL, UNIQUE | SHA-256 of the opaque challenge token |
+| `expires_at` | `TIMESTAMPTZ` | NOT NULL | TTL 300 s |
+| `used_at` | `TIMESTAMPTZ` | NULL | single-use |
+| `created_at` | `TIMESTAMPTZ` | NOT NULL DEFAULT now() | |
+
+- **Indexes:** partial `mfa_challenges_user_idx (user_id) WHERE used_at IS NULL`.
+
+**`security_events`** — account-scoped, append-only security audit trail (the guild `audit_log_entries` is guild-scoped and cannot hold account events).
+
+| Column | Type | Constraints | Notes |
+| --- | --- | --- | --- |
+| `id` | `BIGINT` | PK | snowflake |
+| `user_id` | `BIGINT` | NOT NULL, FK → `users(id)` ON DELETE CASCADE | |
+| `event` | `TEXT` | NOT NULL | e.g. `password_changed`, `password_reset`, `email_verified`, `mfa_enabled`, `mfa_disabled`, `recovery_codes_regenerated`, `session_revoked` |
+| `ip` | `TEXT` | NULL | request IP (not hashed; account-scoped) |
+| `user_agent` | `TEXT` | NULL | |
+| `created_at` | `TIMESTAMPTZ` | NOT NULL DEFAULT now() | |
+
+- **Indexes:** `security_events_user_idx (user_id, id DESC)`.
+
+**`email_tokens`** (pre-existing) — milestone 1 adds a partial index `email_tokens_user_type_idx (user_id, type) WHERE used_at IS NULL` for pending-token lookups/sweeps. Token rows are stored as SHA-256 hashes with `expires_at` and `used_at`; `type ∈ {verify_email, reset_password}`.
+
+> **Doc/impl reconciliation:** the authoritative schema is the SQL under `apps/server/src/db/migrations/`. Some earlier design tables above (`users.email_normalized`, `users.verified`, `sessions.device_id`, `sessions.csrf_hash`, `sessions.ip_hash`) describe the original design and differ from the shipped columns (`email`, `email_verified`, `sessions.csrf_secret`, `sessions.ip`, `sessions.client_name`). The migrations are the source of truth.
 
 ### 3.2 Relationships
 

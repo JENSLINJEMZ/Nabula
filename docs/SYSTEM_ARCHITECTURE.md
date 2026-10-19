@@ -354,7 +354,7 @@ flowchart LR
 ```
 
 - **Images:** multi-stage Dockerfiles per app; server image is also run as the worker with `NEBULA_ROLE=worker`.
-- **Config:** all via env (`.env.example` is the contract: `PORT`, `DATABASE_URL`, `REDIS_URL`, `SESSION_SECRET`, `COOKIE_SECURE`, `STORAGE_DRIVER`, `STORAGE_LOCAL_DIR`, `MAX_UPLOAD_BYTES`, `STORAGE_QUOTA_BYTES_PER_GUILD`, `RATE_LIMIT_DISABLED`, `SMTP_URL`, `VITE_API_ORIGIN`).
+- **Config:** all via env (`.env.example` is the contract: `PORT`, `DATABASE_URL`, `REDIS_URL`, `SESSION_SECRET`, `COOKIE_SECURE`, `STORAGE_DRIVER`, `STORAGE_LOCAL_DIR`, `MAX_UPLOAD_BYTES`, `STORAGE_QUOTA_BYTES_PER_GUILD`, `RATE_LIMIT_DISABLED`, `SMTP_URL` (or `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS`) + `SMTP_FROM`/`MAIL_DEV_DIR`, `VITE_API_ORIGIN`).
 - **Migrations:** run as an init step (or a one-shot `migrate` command) before the server starts; the server refuses to boot on schema mismatch.
 - **Multi-node path:** run N `server` containers behind the proxy, all sharing Postgres + Redis + object storage; enable read replicas when read load dominates.
 

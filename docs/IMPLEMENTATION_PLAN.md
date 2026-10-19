@@ -54,7 +54,24 @@ Turn the scaffold into a running monorepo: build/typecheck/test pipeline, config
 None (start). Blocks everything.
 
 ### Remaining work
-Entire milestone. Includes fixing the known `packages/shared/src/permissions.ts` input-interface gap (`everyoneRoleId`) so the module compiles and can be unit-tested — tracked under **T2.1**.
+Milestone foundation is delivered. The **account-security extension** (change password, email verification, password reset, TOTP 2FA, recovery codes, session management) shipped as its own forward-only increment — see §2.1.
+
+### 2.1 Account-security increment (implemented 2026-10-19)
+
+Scope: complete Authentication & Account Security on top of the existing auth (no rebuild). Extended M1 rather than a new milestone, per `milestone_1_plan.md` at the repo root.
+
+Delivered:
+- **Change password** — `POST /api/auth/password/change` (current-password re-auth; revokes other sessions, keeps the caller's).
+- **Email verification** — `POST /api/auth/email/verify-request` (session, rate-limited), `POST /api/auth/email/verify`; SHA-256 single-use tokens, 24 h expiry; SMTP via nodemailer or disk capture (`MAIL_DEV_DIR`); prod without SMTP → `503 MAIL_NOT_CONFIGURED`.
+- **Password reset** — `POST /api/auth/password/forgot` (no enumeration) and `/api/auth/password/reset` (single-use, 1 h, revokes all sessions).
+- **TOTP 2FA** — enroll (password) / activate (verify code) / disable (re-auth), secret encrypted AES-256-GCM under `TOTP_ENCRYPTION_KEY`; second-factor login via `POST /api/auth/login/2fa` with a single-use, non-consuming-on-failure challenge; 10 hashed single-use recovery codes.
+- **Session management** — list with metadata, revoke one, log out all; revocation disconnects the corresponding Socket.IO session (`SESSION_REVOKED`).
+- **Schema** — `0006_account_security.sql` (forward-only): `users.mfa_secret_enc`/`mfa_enrolled_at`, `totp_recovery_codes`, `mfa_challenges`, `security_events`, `email_tokens` index.
+- **Config** — `SMTP_URL` **or** `SMTP_HOST`/`SMTP_PORT`/`SMTP_USER`/`SMTP_PASS` (resolved by `resolveSmtpSettings()` in `config.ts`; blank values count as unset), `SMTP_FROM`, `MAIL_DEV_DIR`, required `TOTP_ENCRYPTION_KEY` (≥32, ≠ `SESSION_SECRET`); production fail-fast checks. The vitest and Playwright configs blank every `SMTP_*` variable so suite mail always stays on disk.
+- **Web** — Settings → Security (password/email/2FA/recovery), login second-factor step, and public forgot/reset/verify pages.
+- **Tests** — 24 server tests (15 integration + 9 SMTP relay-resolution) + 3 browser specs (see TEST_PLAN §14).
+
+Remaining/blocked: production **SMTP credentials** must be supplied for real delivery; socket-based revocation is **single-node** (needs a shared registry/Redis adapter to scale out); guild-level `mfa_level` permission gating is out of scope for this increment.
 
 ---
 
