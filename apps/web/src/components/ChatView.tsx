@@ -18,8 +18,8 @@ import {
   UserPlus,
   X,
 } from "lucide-react";
-import { ChannelType, MessageType, Permissions, type Channel, type Message, type PublicUser } from "@nebula/shared";
-import { useApp } from "../store";
+import { ChannelType, MessageType, Permissions, type Channel, type Embed, type Message, type PublicUser } from "@nebula/shared";
+import { useApp, type Command } from "../store";
 import { hasBits } from "../lib/perms";
 import { renderMarkdown } from "../lib/markdown";
 import { avatarColor, cx, displayName, formatBytes, formatClock, dayKey, formatDayDivider, isSameGroup } from "../lib/ui";
@@ -73,6 +73,57 @@ function AttachmentGrid({ items }: { items: Message["attachments"] }) {
                 <span className="truncate text-nebula-accent">{a.filename}</span>
                 <span className="shrink-0 text-xs text-slate-500">{formatBytes(a.size)}</span>
               </a>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/* --------------------------------------------------------------- embeds */
+
+/**
+ * Renders stored, self-contained embeds. Nothing is fetched: a webhook embed is
+ * validated server-side and stored verbatim, so this only formats the fields the
+ * server already accepted. `url` links are rendered as inert anchors.
+ */
+function EmbedList({ embeds }: { embeds: Embed[] }) {
+  if (!embeds || embeds.length === 0) return null;
+  return (
+    <div className="mt-1.5 space-y-1.5">
+      {embeds.map((embed, i) => {
+        const accent = embed.color != null ? `#${(embed.color & 0xffffff).toString(16).padStart(6, "0")}` : "#6366f1";
+        return (
+          <div
+            key={i}
+            data-testid="message-embed"
+            className="max-w-md rounded-md border border-nebula-800 bg-nebula-950/60 px-3 py-2"
+            style={{ borderLeft: `3px solid ${accent}` }}
+          >
+            {embed.title && (
+              <div className="text-sm font-semibold text-slate-100">
+                {embed.url ? (
+                  <a href={embed.url} target="_blank" rel="noreferrer noopener" className="hover:underline">
+                    {embed.title}
+                  </a>
+                ) : (
+                  embed.title
+                )}
+              </div>
+            )}
+            {embed.description && (
+              <p className="mt-0.5 whitespace-pre-wrap break-words text-sm text-slate-300">{embed.description}</p>
+            )}
+            {embed.fields.length > 0 && (
+              <div className="mt-1.5 grid grid-cols-1 gap-1 sm:grid-cols-2">
+                {embed.fields.map((field, fi) => (
+                  <div key={fi} className={field.inline ? "" : "sm:col-span-2"}>
+                    <div className="text-xs font-semibold text-slate-200">{field.name}</div>
+                    <div className="whitespace-pre-wrap break-words text-sm text-slate-400">{field.value}</div>
+                  </div>
+                ))}
+              </div>
             )}
           </div>
         );
@@ -228,7 +279,7 @@ function MessageRow({
           {!grouped && (
             <div className="flex items-baseline gap-2">
               <button type="button" className="text-sm font-semibold text-slate-100 hover:underline" onClick={() => openMemberProfile(message.author.id)}>
-                {displayName(message.author)}
+                {message.webhookName || displayName(message.author)}
               </button>
               {message.author.bot && (
                 <span className="rounded bg-nebula-accent/20 px-1 text-[10px] font-semibold uppercase text-nebula-accent">bot</span>
@@ -277,6 +328,8 @@ function MessageRow({
           )}
 
           <AttachmentGrid items={message.attachments} />
+
+          {(message.embeds?.length ?? 0) > 0 && <EmbedList embeds={message.embeds ?? []} />}
 
           {(message.reactions?.length ?? 0) > 0 && (
             <div className="mt-1.5 flex flex-wrap gap-1">
@@ -592,6 +645,18 @@ export function ChatView() {
   const conversationId = activeChannelId ?? activeDmId;
   const isDm = activeChannelId === null && activeDmId !== null;
 
+  const commands = useApp((s) => s.commands);
+  const loadCommands = useApp((s) => s.loadCommands);
+  const runCommand = useApp((s) => s.runCommand);
+  const commandResults = useApp((s) => (conversationId ? s.commandResults[conversationId] : undefined));
+  const dismissCommandResult = useApp((s) => s.dismissCommandResult);
+  const [cmdIndex, setCmdIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState<string | null>(null);
+
+  useEffect(() => {
+    void loadCommands(activeGuildId);
+  }, [activeGuildId, loadCommands]);
+
   const dmRecipient = useMemo(
     () => (isDm ? (dms.find((d) => d.id === activeDmId)?.recipients ?? []).find((u) => u.id !== me?.id) ?? null : null),
     [isDm, dms, activeDmId, me?.id],
@@ -649,6 +714,27 @@ export function ChatView() {
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages.length, conversationId]);
 
+  // Slash-command autocomplete is only active while the first token has no
+  // space: once the user starts typing arguments the raw line is handed to the
+  // server-side parser and validator instead.
+  const slashQuery = draft.startsWith("/") && !draft.includes(" ") ? draft.slice(1).toLowerCase() : null;
+  const slashMatches = useMemo(() => {
+    if (slashQuery === null) return [];
+    return commands
+      .filter((c) => (isDm ? c.dmCapable : true))
+      .filter((c) => c.name.startsWith(slashQuery))
+      .slice(0, 8);
+  }, [commands, slashQuery, isDm]);
+  const slashOpen = slashMatches.length > 0 && slashDismissed !== draft;
+  const selectedCommand = slashMatches[Math.min(cmdIndex, slashMatches.length - 1)];
+
+  function completeCommand(cmd: Command | undefined) {
+    if (!cmd) return;
+    setDraft(`/${cmd.name} `);
+    setCmdIndex(0);
+    setSlashDismissed(null);
+  }
+
   async function submit(content: string, event?: FormEvent) {
     event?.preventDefault();
     if (!conversationId || sending || !canSend) return;
@@ -656,6 +742,15 @@ export function ChatView() {
     if (!trimmed && pending.length === 0) return;
     setSending(true);
     try {
+      // A leading slash is always interpreted as a command. The server parses
+      // and validates it; the client never decides permissions or shell-like
+      // behaviour, so a forged payload cannot escalate anything.
+      if (trimmed.startsWith("/") && pending.length === 0 && !replyTarget) {
+        setSlashDismissed(null);
+        const result = await runCommand(conversationId, trimmed);
+        if (result) setDraft("");
+        return;
+      }
       if (pending.length > 0) {
         await sendWithAttachments(conversationId, trimmed, pending.map((a) => a.id));
       } else if (replyTarget) {
@@ -681,6 +776,40 @@ export function ChatView() {
   }
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
+    // Pressing space closes the autocomplete — allow the user to type args.
+    if (e.key === " ") {
+      setSlashDismissed(null);
+      setCmdIndex(0);
+    }
+    if (slashOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setCmdIndex((i) => (i + 1) % slashMatches.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setCmdIndex((i) => (i - 1 + slashMatches.length) % slashMatches.length);
+        return;
+      }
+      if (e.key === "Tab") {
+        e.preventDefault();
+        completeCommand(selectedCommand);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSlashDismissed(draft);
+        return;
+      }
+      if (e.key === "Enter") {
+        e.preventDefault();
+        const exact = selectedCommand && selectedCommand.name === draft.slice(1).toLowerCase();
+        if (exact && selectedCommand!.options.every((o) => !o.required)) void submit(draft);
+        else completeCommand(selectedCommand);
+        return;
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       void submit(e.currentTarget.value);
@@ -845,6 +974,27 @@ export function ChatView() {
         }}
         className="shrink-0 px-4 pb-5 pt-1"
       >
+        {(commandResults?.length ?? 0) > 0 && (
+          <div className="mb-2 space-y-1.5">
+            {commandResults!.map((r, i) => (
+              <div
+                key={r.invocationId ?? i}
+                data-testid="command-result"
+                className="flex items-start gap-2 rounded-md border border-nebula-700 bg-nebula-900 px-3 py-1.5 text-sm text-slate-200"
+              >
+                <div className="min-w-0 flex-1 whitespace-pre-wrap break-words">{r.content}</div>
+                <button
+                  type="button"
+                  aria-label="Dismiss"
+                  className="text-slate-500 hover:text-nebula-danger"
+                  onClick={() => dismissCommandResult(conversationId, r.invocationId)}
+                >
+                  <X size={14} aria-hidden />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         {!canSend && (
           <p className="mb-2 rounded-md border border-nebula-700 bg-nebula-900 px-3 py-1.5 text-xs text-slate-400">
             You do not have permission to send messages in this channel.
@@ -888,15 +1038,38 @@ export function ChatView() {
               <input ref={fileRef} type="file" multiple className="hidden" onChange={(e) => void onPickFile(e.target.files)} />
             </>
           )}
-          <textarea
-            className="max-h-40 min-h-[24px] flex-1 resize-none bg-transparent py-1 text-sm text-slate-100 placeholder-slate-500 outline-none disabled:opacity-50"
-            rows={1}
-            disabled={!canSend}
-            placeholder={canSend ? (isDm ? `Message ${headerLabel}` : `Message #${channel.name}`) : "You cannot send messages here"}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onKeyDown}
-          />
+          <div className="relative flex-1">
+            <textarea
+              className="max-h-40 min-h-[24px] w-full resize-none bg-transparent py-1 text-sm text-slate-100 placeholder-slate-500 outline-none disabled:opacity-50"
+              rows={1}
+              disabled={!canSend}
+              placeholder={canSend ? (isDm ? `Message ${headerLabel}` : `Message #${channel.name}`) : "You cannot send messages here"}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={onKeyDown}
+            />
+            {slashOpen && selectedCommand && (
+              <div className="absolute bottom-8 left-0 z-30 w-72 rounded-lg border border-nebula-700 bg-nebula-900 shadow-xl">
+                <ul className="max-h-48 overflow-auto py-1 text-sm">
+                  {slashMatches.map((cmd, idx) => (
+                    <li
+                      key={cmd.name}
+                      role="button"
+                      className={cx(
+                        "flex cursor-pointer items-start gap-2 px-3 py-1.5",
+                        idx === cmdIndex && "bg-nebula-accent/15 text-nebula-accent2",
+                      )}
+                      onMouseDown={(e) => e.preventDefault()}
+                      onClick={() => completeCommand(cmd)}
+                    >
+                      <div className="font-semibold">/{cmd.name}</div>
+                      <div className="min-w-0 flex-1 truncate text-xs text-slate-500">{cmd.description}</div>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
           <button
             type="submit"
             className="btn-primary px-2 py-1.5"

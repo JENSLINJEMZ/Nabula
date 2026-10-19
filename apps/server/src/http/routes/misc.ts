@@ -19,6 +19,7 @@ import {
   listChannelWebhooks,
   listWebhookDeliveries,
   rotateWebhookToken,
+  testWebhook,
   updateWebhook,
 } from "../../domain/webhooks.js";
 import { emitInteractionResult, invokeCommand, listCommands, parseCommandContent } from "../../domain/slashCommands.js";
@@ -236,6 +237,14 @@ export async function registerMiscRoutes(app: FastifyInstance): Promise<void> {
       const { id, webhookId } = z.object({ id: Id, webhookId: Id }).parse(request.params);
       const result = await rotateWebhookToken(id, webhookId, currentUserId(request));
       return reply.send({ webhook: result.webhook, token: result.token });
+    });
+
+    // Permission-checked test delivery: verifies the destination without ever
+    // revealing the stored token to the caller.
+    authed.post("/api/guilds/:id/webhooks/:webhookId/execute", async (request, reply) => {
+      const { id, webhookId } = z.object({ id: Id, webhookId: Id }).parse(request.params);
+      const result = await testWebhook(id, webhookId, currentUserId(request));
+      return reply.status(201).send({ message: result.message, duplicate: result.duplicate });
     });
 
     authed.get("/api/guilds/:id/webhooks/:webhookId/deliveries", async (request, reply) => {

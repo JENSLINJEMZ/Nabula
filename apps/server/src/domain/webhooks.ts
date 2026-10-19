@@ -377,21 +377,20 @@ async function recordDelivery(input: {
 }
 
 /**
- * Execute a webhook. Authorization is the token itself (bearer capability), so no
- * user permission check applies — but the webhook must exist, be enabled, and the
- * token must match.
+ * Shared delivery core for both token-authenticated execution and the
+ * permission-checked management "test delivery" path. The caller must have
+ * already resolved and authorized the webhook.
  *
  * `idempotencyKey` makes retries safe: the key is reserved before the message is
  * created, so a repeated delivery returns the original message instead of
  * posting a duplicate.
  */
-export async function executeWebhook(
-  webhookId: string,
-  token: string,
+async function deliverResolvedWebhook(
+  webhook: WebhookRow & { bot_user_id: string },
   input: ExecuteWebhookInput,
 ): Promise<ExecuteWebhookResult> {
-  const webhook = await resolveWebhook(webhookId, token);
   const botUserId = webhook.bot_user_id;
+  const webhookId = webhook.id;
   let reservationId: string | null = null;
 
   try {
@@ -486,6 +485,43 @@ export async function executeWebhook(
     }).catch(() => undefined);
     throw error;
   }
+}
+
+/**
+ * Execute a webhook by token. Authorization is the token itself (bearer
+ * capability), so no user permission check applies — but the webhook must exist,
+ * be enabled, and the token must match.
+ */
+export async function executeWebhook(
+  webhookId: string,
+  token: string,
+  input: ExecuteWebhookInput,
+): Promise<ExecuteWebhookResult> {
+  const webhook = await resolveWebhook(webhookId, token);
+  return deliverResolvedWebhook(webhook, input);
+}
+
+/**
+ * Management "test delivery": post a sample message through an existing webhook
+ * using its stored secret, so operators can verify a destination without ever
+ * seeing the token. Requires MANAGE_WEBHOOKS and works even while the webhook is
+ * disabled, so a misconfiguration can be diagnosed before re-enabling.
+ */
+export async function testWebhook(
+  guildId: string,
+  webhookId: string,
+  actorId: string,
+): Promise<ExecuteWebhookResult> {
+  await requireManageWebhooks(guildId, actorId);
+  const row = await queryOne<WebhookRow>(
+    `SELECT ${WEBHOOK_COLUMNS} FROM webhooks WHERE id = $1 AND guild_id = $2`,
+    [webhookId, guildId],
+  );
+  if (!row || !row.bot_user_id) throw Errors.NOT_FOUND(undefined, "Unknown webhook.");
+  return deliverResolvedWebhook(
+    { ...row, bot_user_id: row.bot_user_id },
+    { content: "Test delivery from the Nebula webhook console." },
+  );
 }
 
 /** Used to verify a viewer may see a webhook's channel before listing. */

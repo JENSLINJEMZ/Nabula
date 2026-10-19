@@ -2,6 +2,9 @@ import { create } from "zustand";
 import type {
   AuditLogEntry,
   Channel,
+  Command,
+  CommandResult,
+  Embed,
   Guild,
   GuildMember,
   Invite,
@@ -15,8 +18,17 @@ import type {
   SelfUser,
   UserSettings,
   VoiceState,
+  Webhook,
+  WebhookDelivery,
 } from "@nebula/shared";
-import { apiDelete, apiGet, apiPatch, apiPost, apiPut, apiUpload } from "./lib/api";
+import {
+  apiDelete,
+  apiGet,
+  apiPatch,
+  apiPost,
+  apiPut,
+  apiUpload,
+} from "./lib/api";
 import { connectSocket, disconnectSocket, getSocket, subscribe } from "./lib/socket";
 
 /* --------------------------------------------------------------- exports */
@@ -25,6 +37,9 @@ export type User = PublicUser;
 export type {
   AuditLogEntry,
   Channel,
+  Command,
+  CommandResult,
+  Embed,
   Guild,
   GuildMember,
   Invite,
@@ -38,6 +53,8 @@ export type {
   SelfUser,
   UserSettings,
   VoiceState,
+  Webhook,
+  WebhookDelivery,
 };
 
 export type Toast = { kind: "error" | "info" | "success"; message: string } | null;
@@ -126,8 +143,9 @@ export interface AppState {
 
   settings: UserSettings | null;
   notificationSettings: NotificationSettings | null;
-
-  // ---- actions ----
+  commands: Command[];
+  commandResults: Record<string, CommandResult[]>;
+  webhooksByChannel: Record<string, Webhook[]>;
   bootstrap: () => Promise<void>;
   login: (username: string, password: string) => Promise<void>;
   register: (username: string, password: string, inviteCode?: string) => Promise<void>;
@@ -234,6 +252,30 @@ export interface AppState {
   setChannelSettings: (channelId: string | null) => void;
   setPinnedOpen: (open: boolean) => void;
   setNotificationsOpen: (open: boolean) => void;
+
+  // ---- slash commands ----
+  loadCommands: (guildId: string | null) => Promise<void>;
+  runCommand: (channelId: string, content: string) => Promise<CommandResult | null>;
+  pushCommandResult: (result: CommandResult) => void;
+  dismissCommandResult: (channelId: string, invocationId: string | null) => void;
+
+  // ---- webhooks ----
+  loadWebhooks: (guildId: string, channelId: string) => Promise<Webhook[]>;
+  createWebhook: (
+    guildId: string,
+    channelId: string,
+    name: string,
+  ) => Promise<{ webhook: Webhook; token: string } | null>;
+  updateWebhook: (
+    guildId: string,
+    webhookId: string,
+    patch: { name?: string; disabled?: boolean },
+  ) => Promise<Webhook | null>;
+  rotateWebhook: (guildId: string, webhookId: string) => Promise<{ webhook: Webhook; token: string } | null>;
+  deleteWebhook: (guildId: string, webhookId: string) => Promise<boolean>;
+  testWebhook: (guildId: string, webhookId: string) => Promise<boolean>;
+  uploadWebhookAvatar: (guildId: string, webhookId: string, file: File) => Promise<Webhook | null>;
+  loadWebhookDeliveries: (guildId: string, webhookId: string) => Promise<WebhookDelivery[]>;
 }
 
 function errText(e: unknown): string {
@@ -292,8 +334,11 @@ export const useApp = create<AppState>()((set, get) => {
     channelSettingsId: null,
     pinnedOpen: false,
     notificationsOpen: false,
-    settings: null,
     notificationSettings: null,
+    settings: null,
+    commands: [],
+    commandResults: {},
+    webhooksByChannel: {},
 
     pushToast: (toast) => set({ toast }),
     dismissToast: () => set({ toast: null }),
@@ -1000,8 +1045,165 @@ export const useApp = create<AppState>()((set, get) => {
     setChannelSettings: (channelId) => set({ channelSettingsId: channelId }),
     setPinnedOpen: (open) => set({ pinnedOpen: open }),
     setNotificationsOpen: (open) => set({ notificationsOpen: open }),
+
+    /* ----------------------------------------------------- slash commands */
+
+    async loadCommands(guildId) {
+      const res = await run(async () =>
+        apiGet<{ commands: Command[] }>(`/api/commands${guildId ? `?guildId=${guildId}` : ""}`),
+      );
+      if (res) set({ commands: res.commands });
+    },
+
+    async runCommand(channelId, content) {
+      const invocationId = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+      const res = await run(async () =>
+        apiPost<{ result: CommandResult }>("/api/interactions", { channelId, content, invocationId }),
+      );
+      if (!res) return null;
+      const result = res.result;
+      // The server broadcasts non-ephemeral replies as normal messages; only
+      // private responses need to be surfaced locally (and via the gateway).
+      if (result.ephemeral) get().pushCommandResult(result);
+      else await get().loadMessages(channelId);
+      return result;
+    },
+
+    pushCommandResult(result) {
+      set((s) => ({
+        commandResults: {
+          ...s.commandResults,
+          [result.channelId]: appendCommandResult(s.commandResults[result.channelId] ?? [], result),
+        },
+      }));
+    },
+
+    dismissCommandResult(channelId, invocationId) {
+      set((s) => {
+        const list = s.commandResults[channelId] ?? [];
+        return {
+          commandResults: {
+            ...s.commandResults,
+            [channelId]: list.filter((r) => r.invocationId !== invocationId),
+          },
+        };
+      });
+    },
+
+    /* ---------------------------------------------------------- webhooks */
+
+    async loadWebhooks(guildId, channelId) {
+      const res = await run(async () =>
+        apiGet<{ webhooks: Webhook[] }>(`/api/channels/${channelId}/webhooks`),
+      );
+      const webhooks = res?.webhooks ?? [];
+      set((s) => ({ webhooksByChannel: { ...s.webhooksByChannel, [channelId]: webhooks } }));
+      return webhooks;
+    },
+
+    async createWebhook(guildId, channelId, name) {
+      const res = await run(async () =>
+        apiPost<{ webhook: Webhook; token: string }>(`/api/channels/${channelId}/webhooks`, { name }),
+      );
+      if (!res) return null;
+      set((s) => ({
+        webhooksByChannel: {
+          ...s.webhooksByChannel,
+          [channelId]: [...(s.webhooksByChannel[channelId] ?? []), res.webhook],
+        },
+      }));
+      return res;
+    },
+
+    async updateWebhook(guildId, webhookId, patch) {
+      const res = await run(async () =>
+        apiPatch<{ webhook: Webhook }>(`/api/guilds/${guildId}/webhooks/${webhookId}`, patch),
+      );
+      if (!res) return null;
+      set((s) => ({
+        webhooksByChannel: {
+          ...s.webhooksByChannel,
+          [res.webhook.channelId]: (s.webhooksByChannel[res.webhook.channelId] ?? []).map((w) =>
+            w.id === webhookId ? res.webhook : w,
+          ),
+        },
+      }));
+      return res.webhook;
+    },
+
+    async rotateWebhook(guildId, webhookId) {
+      const res = await run(async () =>
+        apiPost<{ webhook: Webhook; token: string }>(`/api/guilds/${guildId}/webhooks/${webhookId}/rotate`),
+      );
+      if (!res) return null;
+      set((s) => ({
+        webhooksByChannel: {
+          ...s.webhooksByChannel,
+          [res.webhook.channelId]: (s.webhooksByChannel[res.webhook.channelId] ?? []).map((w) =>
+            w.id === webhookId ? res.webhook : w,
+          ),
+        },
+      }));
+      return res;
+    },
+
+    async deleteWebhook(guildId, webhookId) {
+      const ok = await run(async () =>
+        apiDelete(`/api/guilds/${guildId}/webhooks/${webhookId}`).then(() => true),
+      );
+      if (!ok) return false;
+      set((s) => {
+        const next: Record<string, Webhook[]> = {};
+        for (const [channelId, list] of Object.entries(s.webhooksByChannel)) {
+          next[channelId] = list.filter((w) => w.id !== webhookId);
+        }
+        return { webhooksByChannel: next };
+      });
+      return true;
+    },
+
+    async testWebhook(guildId, webhookId) {
+      const res = await run(async () =>
+        apiPost(`/api/guilds/${guildId}/webhooks/${webhookId}/execute`).then(() => true),
+      );
+      return res === true;
+    },
+
+    async uploadWebhookAvatar(guildId, webhookId, file) {
+      const res = await run(async () =>
+        apiUpload<{ webhook: Webhook }>(`/api/guilds/${guildId}/webhooks/${webhookId}/avatar`, file),
+      );
+      if (!res) return null;
+      set((s) => {
+        const next: Record<string, Webhook[]> = {};
+        for (const [channelId, list] of Object.entries(s.webhooksByChannel)) {
+          next[channelId] = list.map((w) => (w.id === webhookId ? (res.webhook as Webhook) : w));
+        }
+        return { webhooksByChannel: next };
+      });
+      return res.webhook;
+    },
+
+    async loadWebhookDeliveries(guildId, webhookId) {
+      const res = await run(async () =>
+        apiGet<{ deliveries: WebhookDelivery[] }>(`/api/guilds/${guildId}/webhooks/${webhookId}/deliveries`),
+      );
+      return res?.deliveries ?? [];
+    },
   };
 });
+
+/**
+ * Append an ephemeral command result, de-duplicating by invocation id so the
+ * optimistic local push and the gateway echo never double-render. Keeps only the
+ * most recent handful per channel.
+ */
+export function appendCommandResult(list: CommandResult[], result: CommandResult): CommandResult[] {
+  const filtered = result.invocationId
+    ? list.filter((r) => r.invocationId !== result.invocationId)
+    : list;
+  return [...filtered, result].slice(-5);
+}
 
 function findChannelOfMessage(state: AppState, messageId: string): string | null {
   for (const [channelId, list] of Object.entries(state.messagesByChannel)) {

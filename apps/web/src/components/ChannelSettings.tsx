@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Plus, Trash2 } from "lucide-react";
-import { Permissions, type ChannelOverwrite } from "@nebula/shared";
+import { Copy, Plus, RefreshCcw, Trash2, Upload, Webhook } from "lucide-react";
+import { Permissions, type ChannelOverwrite, type Webhook as WebhookType } from "@nebula/shared";
 import { useApp, type Overwrite } from "../store";
 import { hasBits } from "../lib/perms";
 import { cx, memberName, roleColor } from "../lib/ui";
@@ -59,6 +59,23 @@ export function ChannelSettings({ channelId, onClose }: { channelId: string; onC
   const [overwrites, setOverwrites] = useState<Overwrite[]>([]);
   const [editingTarget, setEditingTarget] = useState<string | null>(null);
 
+  const loadWebhooks = useApp((s) => s.loadWebhooks);
+  const createWebhook = useApp((s) => s.createWebhook);
+  const updateWebhook = useApp((s) => s.updateWebhook);
+  const rotateWebhook = useApp((s) => s.rotateWebhook);
+  const deleteWebhook = useApp((s) => s.deleteWebhook);
+  const testWebhook = useApp((s) => s.testWebhook);
+  const uploadWebhookAvatar = useApp((s) => s.uploadWebhookAvatar);
+  const loadWebhookDeliveries = useApp((s) => s.loadWebhookDeliveries);
+
+  const [webhooks, setWebhooks] = useState<WebhookType[]>([]);
+  const [newWebhookName, setNewWebhookName] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [newToken, setNewToken] = useState<string | null>(null);
+  const [activeWebhook, setActiveWebhook] = useState<WebhookType | null>(null);
+  const [deliv, setDeliv] = useState<any[]>([]);
+  const [busy, setBusy] = useState(false);
+
   const isVoice = channel?.type === 2 || channel?.type === 13;
   const isCategory = channel?.type === 4;
 
@@ -76,6 +93,11 @@ export function ChannelSettings({ channelId, onClose }: { channelId: string; onC
   useEffect(() => {
     void loadOverwrites(channelId).then(setOverwrites).catch(() => undefined);
   }, [channelId, loadOverwrites]);
+
+  useEffect(() => {
+    if (!activeGuildId || !canManage) return;
+    void loadWebhooks(activeGuildId, channelId).then(setWebhooks).catch(() => undefined);
+  }, [activeGuildId, channelId, canManage, loadWebhooks]);
 
   if (!channel || !activeGuildId) return null;
 
@@ -325,6 +347,195 @@ export function ChannelSettings({ channelId, onClose }: { channelId: string; onC
             >
               <Trash2 size={15} className="mr-1 inline" aria-hidden /> Delete channel
             </button>
+          </div>
+        )}
+
+        {canManage && (
+          <div className="space-y-3 border-t border-nebula-800 pt-4">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Webhooks</p>
+              <span className="text-xs text-slate-500">Create and manage integrations</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                className="input w-56"
+                placeholder="Webhook name"
+                value={newWebhookName}
+                onChange={(e) => setNewWebhookName(e.target.value)}
+              />
+              <button
+                type="button"
+                className="btn-ghost text-xs"
+                disabled={!newWebhookName.trim() || creating}
+                onClick={async () => {
+                  if (!activeGuildId) return;
+                  setCreating(true);
+                  const res = await createWebhook(activeGuildId, channelId, newWebhookName.trim());
+                  setCreating(false);
+                  if (res) {
+                    setWebhooks((prev) => [...prev, res.webhook]);
+                    setNewToken(res.token);
+                    setNewWebhookName("");
+                  }
+                }}
+              >
+                <Plus size={14} className="mr-1 inline" aria-hidden /> Create
+              </button>
+            </div>
+            {newToken && (
+              <div className="rounded-md border border-nebula-800 bg-nebula-950/60 p-2 text-xs text-slate-300">
+                <div className="mb-1 font-semibold text-slate-200">New token (only shown once)</div>
+                <code className="break-all font-mono">{newToken}</code>
+                <button
+                  type="button"
+                  className="ml-2 text-slate-500 hover:text-slate-200"
+                  onClick={() => void navigator.clipboard?.writeText(newToken)}
+                >
+                  <Copy size={12} className="inline" aria-hidden /> Copy
+                </button>
+                <button
+                  type="button"
+                  className="ml-2 text-slate-500 hover:text-slate-200"
+                  onClick={() => setNewToken(null)}
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+            <ul className="space-y-1">
+              {webhooks.map((w) => (
+                <li key={w.id} className="flex items-center gap-2 rounded border border-nebula-800 px-2 py-1.5 text-sm text-slate-300">
+                  <Webhook size={14} className="text-slate-500" aria-hidden />
+                  <span className="font-medium text-slate-200">{w.name}</span>
+                  <span className="text-xs text-slate-500">{w.tokenPrefix}… {w.disabled ? "(disabled)" : ""}</span>
+                  <button
+                    type="button"
+                    className="ml-auto btn-ghost text-xs"
+                    onClick={async () => {
+                      if (!activeGuildId) return;
+                      const deliveries = await loadWebhookDeliveries(activeGuildId, w.id);
+                      setActiveWebhook(w);
+                      setDeliv(deliveries);
+                    }}
+                  >
+                    Details
+                  </button>
+                </li>
+              ))}
+              {webhooks.length === 0 && <li className="px-2 py-1 text-xs text-slate-500">No webhooks.</li>}
+            </ul>
+            {activeWebhook && (
+              <div className="rounded-md border border-nebula-800 p-3 text-sm text-slate-300">
+                <div className="mb-2 flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold text-slate-100">{activeWebhook.name}</div>
+                    <div className="text-xs text-slate-500">Prefix {activeWebhook.tokenPrefix}… · {activeWebhook.disabled ? "disabled" : "enabled"}</div>
+                  </div>
+                  <button type="button" className="text-slate-500 hover:text-nebula-danger" onClick={() => setActiveWebhook(null)}>
+                    Close
+                  </button>
+                </div>
+                <div className="mb-2 flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    className="btn-ghost text-xs"
+                    disabled={busy}
+                    onClick={async () => {
+                      if (!activeGuildId) return;
+                      setBusy(true);
+                      const res = await rotateWebhook(activeGuildId, activeWebhook.id);
+                      setBusy(false);
+                      if (res) {
+                        setWebhooks((prev) => prev.map((x) => (x.id === res.webhook.id ? res.webhook : x)));
+                        setNewToken(res.token);
+                        setActiveWebhook(res.webhook);
+                      }
+                    }}
+                  >
+                    <RefreshCcw size={12} className="mr-1 inline" aria-hidden /> Rotate
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-ghost text-xs"
+                    disabled={busy}
+                    onClick={async () => {
+                      if (!activeGuildId) return;
+                      setBusy(true);
+                      await updateWebhook(activeGuildId, activeWebhook.id, { disabled: !activeWebhook.disabled });
+                      setBusy(false);
+                      const res = await loadWebhooks(activeGuildId, channelId);
+                      setWebhooks(res);
+                      setActiveWebhook(res.find((x) => x.id === activeWebhook.id) ?? activeWebhook);
+                    }}
+                  >
+                    {activeWebhook.disabled ? "Enable" : "Disable"}
+                  </button>
+                  <label className="btn-ghost text-xs cursor-pointer">
+                    <Upload size={12} className="mr-1 inline" aria-hidden /> Avatar
+                    <input
+                      type="file"
+                      className="hidden"
+                      accept="image/png,image/jpeg,image/gif,image/webp"
+                      onChange={async (e) => {
+                        const f = e.target.files?.[0];
+                        if (!f || !activeGuildId) return;
+                        setBusy(true);
+                        const w = await uploadWebhookAvatar(activeGuildId, activeWebhook.id, f);
+                        setBusy(false);
+                        if (w) {
+                          setWebhooks((prev) => prev.map((x) => (x.id === w.id ? w : x)));
+                          setActiveWebhook(w);
+                        }
+                        if (e.target) e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    className="btn-ghost text-xs"
+                    disabled={busy}
+                    onClick={async () => {
+                      if (!activeGuildId) return;
+                      setBusy(true);
+                      const ok = await testWebhook(activeGuildId, activeWebhook.id);
+                      setBusy(false);
+                      if (ok) alert("Test delivery sent.");
+                      else alert("Test failed. Check permissions or destination.");
+                    }}
+                  >
+                    Send test
+                  </button>
+                  <button
+                    type="button"
+                    className="btn-ghost text-xs text-nebula-danger"
+                    disabled={busy}
+                    onClick={async () => {
+                      if (!activeGuildId || !confirm(`Delete "${activeWebhook.name}"?`)) return;
+                      setBusy(true);
+                      await deleteWebhook(activeGuildId, activeWebhook.id);
+                      setBusy(false);
+                      setWebhooks((prev) => prev.filter((x) => x.id !== activeWebhook.id));
+                      setActiveWebhook(null);
+                    }}
+                  >
+                    <Trash2 size={12} className="mr-1 inline" aria-hidden /> Delete
+                  </button>
+                </div>
+                <div className="text-xs text-slate-500 mb-1">Recent deliveries</div>
+                <ul className="space-y-1 text-xs">
+                  {deliv.map((d) => (
+                    <li key={d.id} className="flex items-center gap-2">
+                      <span className={d.success ? "text-nebula-accent2" : "text-nebula-danger"}>{d.success ? "OK" : "ERR"}</span>
+                      <span>{d.statusCode}</span>
+                      {d.messageId && <span className="text-slate-500">msg {d.messageId.slice(-6)}</span>}
+                      {d.error && <span className="truncate text-slate-500">{d.error}</span>}
+                      <span className="ml-auto text-slate-600">{new Date(d.createdAt).toLocaleTimeString()}</span>
+                    </li>
+                  ))}
+                  {deliv.length === 0 && <li className="text-slate-600">No deliveries.</li>}
+                </ul>
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -1,5 +1,5 @@
-import type { Message, ReadState, VoiceState } from "@nebula/shared";
-import { navigateTo, type AppState } from "./store";
+import type { CommandResult, Message, ReadState, VoiceState } from "@nebula/shared";
+import { appendCommandResult, navigateTo, type AppState } from "./store";
 import { getSocket } from "./lib/socket";
 
 type Setter = (
@@ -102,6 +102,17 @@ export function applyRealtime(set: Setter, get: () => AppState): void {
 
   socket.on("NOTIFICATION_CREATE", () => {
     void get().loadNotifications();
+  });
+
+  // Private slash-command responses arrive only to the invoker's sockets. The
+  // store de-duplicates against the optimistic local push by invocation id.
+  socket.on("INTERACTION_RESULT", (result: CommandResult) => {
+    set((s) => ({
+      commandResults: {
+        ...s.commandResults,
+        [result.channelId]: appendCommandResult(s.commandResults[result.channelId] ?? [], result),
+      },
+    }));
   });
 
   socket.on("RELATIONSHIP_UPDATE", () => {

@@ -42,19 +42,6 @@ async function createGuildWithGeneral(client: TestClient, name: string) {
   return { guildId, generalId: general.id };
 }
 
-async function inviteAndJoin(owner: TestClient, member: TestClient, channelId: string) {
-  const invite = await owner.post<{ invite: { code: string } }>(`/api/channels/${channelId}/invites`, {});
-  expect(invite.status).toBe(201);
-  const joined = await member.post(`/api/invites/${invite.body.invite.code}`, {});
-  expect(joined.status).toBe(200);
-}
-
-async function makeWebhook(owner: TestClient, guildId: string, channelId: string, name = "deploy-bot") {
-  const res = await owner.post<WebhookBody>(`/api/channels/${channelId}/webhooks`, { name });
-  expect(res.status).toBe(201);
-  return { id: res.body.webhook!.id, token: res.body.token!, webhook: res.body.webhook! };
-}
-
 describe("Webhooks", () => {
   it("creates, lists and delivers a webhook message and records an audit entry", async () => {
     const owner = new TestClient(server.url);
@@ -324,6 +311,33 @@ describe("Webhooks", () => {
     expect(serialized).not.toContain("token_hash");
     // Only the display prefix is exposed.
     expect(serialized).toContain(created.body.webhook!.tokenPrefix);
+  });
+
+  it("sends a permission-checked test delivery without exposing the token", async () => {
+    const owner = new TestClient(server.url);
+    await owner.register("wh_test_send");
+    const { guildId, generalId } = await createGuildWithGeneral(owner, "Wh Test Guild");
+    const created = await owner.post<WebhookBody>(`/api/channels/${generalId}/webhooks`, { name: "tester" });
+    const webhookId = created.body.webhook!.id;
+    const token = created.body.token!;
+
+    const sent = await owner.post<WebhookBody>(`/api/guilds/${guildId}/webhooks/${webhookId}/execute`);
+    expect(sent.status).toBe(201);
+    expect(sent.body.message!.content).toContain("Test delivery");
+    // The management path must not leak the secret.
+    expect(JSON.stringify(sent.body)).not.toContain(token);
+
+    // A disabled webhook can still be tested so misconfiguration is diagnosable...
+    const disabled = await owner.patch<WebhookBody>(`/api/guilds/${guildId}/webhooks/${webhookId}`, {
+      disabled: true,
+    });
+    expect(disabled.status).toBe(200);
+    const whileDisabled = await owner.post<WebhookBody>(`/api/guilds/${guildId}/webhooks/${webhookId}/execute`);
+    expect(whileDisabled.status).toBe(201);
+
+    // ...but the public token path stays closed while disabled.
+    const viaToken = await owner.post<ErrorBody>(`/api/webhooks/${webhookId}/${token}`, { content: "blocked" });
+    expect(viaToken.status).toBe(403);
   });
 });
 
