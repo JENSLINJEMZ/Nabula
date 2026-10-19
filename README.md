@@ -1,6 +1,6 @@
 # Nebula
 
-A Discord-inspired, real-time communication platform — **an independent implementation with an original identity**. Servers (guilds), text/voice channels, threads, roles & permissions, friends, DMs and group DMs, realtime messaging, attachments, moderation, client-side routing (deep links/history), and WebRTC voice.
+A Discord-inspired, real-time communication platform — **an independent implementation with an original identity**. Servers (guilds), text/voice channels, threads, roles & permissions, friends, DMs and group DMs, realtime messaging, attachments, moderation, client-side routing (deep links/history), first-party slash commands, incoming webhooks, and WebRTC voice.
 
 > This is not affiliated with, endorsed by, or derived from Discord's proprietary code or assets. The information architecture (guilds → channels → messages) is reproduced; all code, tokens, copy, and branding are original.
 
@@ -11,8 +11,8 @@ Nebula is a working full-stack application, verified by automated tests. The hon
 | Check | Result |
 | --- | --- |
 | Typecheck (3 workspaces) | clean |
-| Unit + integration tests | 66/66 pass (18 unit + 48 integration) |
-| Browser e2e (Playwright) | 20/20 pass (18 specs + 2 auth setup tests) |
+| Unit + integration tests | 87/87 pass (18 unit + 69 integration) |
+| Browser e2e (Playwright) | 32/32 pass (30 specs + 2 auth setup tests) |
 | Production build | pass |
 | Required journeys (12) verified server-side | 12/12 (7+ also in-browser; forwarding/journeys extended) |
 
@@ -30,7 +30,7 @@ nebula/
 ├── apps/
 │   ├── server/        # Fastify API + Socket.IO gateway + raw-SQL migrations/seed
 │   │   ├── src/{http,domain,realtime,db,auth}/…
-│   │   └── test/{journeys,security,threads,group-dms}.test.ts   # 39 integration tests
+│   │   └── test/{journeys,security,threads,group-dms,forwarding,commands,webhooks}.test.ts   # 69 integration tests
 │   └── web/           # React SPA
 │       ├── src/{components,lib}/…
 │       ├── e2e/       # Playwright specs
@@ -76,12 +76,19 @@ Seeded users: `nebula_alice` (guild owner), `nebula_bob`, `nebula_carol`. Their 
 
 ```bash
 npm run typecheck     # tsc --noEmit across all workspaces
-npm test              # shared unit (18) + server integration (39)
+npm test              # shared unit (18) + server integration (69)
 npm run build         # production web bundle
-npm run test:e2e      # Playwright (17 + 2 auth setup) — requires the dev stack + seeded DB running
+npm run test:e2e      # Playwright (30 + 2 auth setup) — requires the dev stack + seeded DB running
 ```
 
 The server integration suite boots the **real** Fastify + Socket.IO stack against an isolated `nebula_test` database — the same routing, auth, CSRF, and permission code that production runs.
+
+> The E2E suite drives real Chromium against the running dev stack. It expects `RATE_LIMIT_MAX` headroom (the Playwright config starts the **API** server with `RATE_LIMIT_MAX=5000`); if you reuse a manually started API server, set that variable yourself or the global limiter will throttle the later specs.
+
+## Slash commands & webhooks
+
+- **Slash commands** — type `/` in a channel to autocomplete the built-in registry: `/ping /help /shrug /me /user /server /nick /slowmode /timeout /poll /topic`. Informational commands reply ephemerally (only you see them); `/shrug`, `/me` and `/poll` post to the channel. Permissions are enforced (`/timeout`, `/slowmode`, `/topic`, `/nick`), invalid arguments and missing permissions are reported inline, and invocations are rate-limited + idempotent. API: `GET /api/commands?guildId=…`, `POST /api/interactions`.
+- **Incoming webhooks** — manage them in **Channel settings → Integrations**: create (the URL token is shown **once**), send a test, rotate (new token once), disable/enable, set an avatar, delete, and inspect delivery history. Deliver with `POST /api/webhooks/{webhookId}/{token}` and body `{"content": "…"}` (optional `X-Idempotency-Key`). The token is a **bearer credential stored only as a SHA-256 hash** — there is no HMAC request signing, delivery cannot be redirected to another channel, embeds are never fetched outbound (no SSRF), and each webhook is limited to 30 deliveries / 10 s. Webhook lifecycle changes are written to the guild audit log.
 
 ## Documentation
 

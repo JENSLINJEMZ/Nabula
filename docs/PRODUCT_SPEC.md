@@ -6,7 +6,7 @@
 | Project | Nebula |
 | Status | **Implemented (partial)** — the shipped slice is described by [FEATURE_MATRIX.md](./FEATURE_MATRIX.md) and [FINAL_ACCEPTANCE_REPORT.md](./FINAL_ACCEPTANCE_REPORT.md); this document is the product intent |
 | Version | 0.1.0 |
-| Last updated | 2026-10-17 |
+| Last updated | 2026-10-19 |
 | Audience | Product, engineering, design, QA, security |
 
 > **Status honesty note.** Nebula is a greenfield build. Every capability described here is **planned**. Where the repository already contains a small scaffold (`package.json` workspaces, `docker-compose.yml`, `.env.example`, `tsconfig.base.json`, and a single untested reference module `packages/shared/src/permissions.ts`), that scaffold is configuration/spec material only — it is **not** a runnable application and is not counted as implemented. See [FEATURE_MATRIX.md](./FEATURE_MATRIX.md).
@@ -217,7 +217,7 @@ Each journey is written so it can be turned directly into an end-to-end test (se
 ### 5.12 Integrations: slash commands & webhooks
 - **FR-I1 (Must)** First-party slash commands registered per guild/global; invoked from composer; results posted as ephemeral or public messages.
 - **FR-I2 (Must)** Incoming webhooks: a channel-bound token URL that creates messages authored by the webhook identity. `MANAGE_WEBHOOKS` to manage.
-- **FR-I3 (Must)** Webhook requests signed (HMAC-SHA256 over the body with the webhook secret); signature verified on receipt. **[DESIGN]**
+- **FR-I3 (Must)** Webhook requests authenticate with a bearer token in the delivery URL (stored only as a SHA-256 hash). **No request signing** is implemented. **[IMPLEMENTED: bearer token; signing not built]**
 - **FR-I4 (Out of scope)** Third-party OAuth2 bot apps, RPC, embedded Activities, slash-command permissions matrix beyond channel/role gating.
 
 ### 5.13 Voice / video / screen share

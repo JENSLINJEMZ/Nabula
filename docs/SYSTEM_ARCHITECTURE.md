@@ -5,7 +5,7 @@
 | Document | SYSTEM_ARCHITECTURE.md |
 | Status | **Implemented** — the described components (Fastify API, Socket.IO gateway, Postgres/Redis, mesh voice) exist and run; gaps (SFU, TURN, multi-node) are listed in [FINAL_ACCEPTANCE_REPORT.md](./FINAL_ACCEPTANCE_REPORT.md) |
 | Version | 0.1.0 |
-| Last updated | 2026-10-17 |
+| Last updated | 2026-10-19 |
 
 > Status note: everything here is the **designed** architecture. No services are running. Where a Discord behavior is relied upon it is marked **[VERIFIED]**; independent choices are **[DESIGN]**.
 
@@ -38,7 +38,7 @@ flowchart TB
   end
 
   subgraph App["Application tier (stateless, horizontally scalable)"]
-    API["Fastify HTTP API<br/>/api/v1"]
+    API["Fastify HTTP API<br/>/api"]
     GW["Socket.IO gateway<br/>namespace /gateway"]
     MED["Media service<br/>upload + download + quota"]
     WORK["Background workers<br/>(retention, thumbnails, fanout)"]
@@ -56,7 +56,7 @@ flowchart TB
   end
 
   WEB -->|HTTPS REST + WSS| RP
-  WH -->|HTTPS POST + HMAC| RP
+  WH -->|HTTPS POST + bearer URL token| RP
   RP --> API
   RP --> GW
   RP --> MED

@@ -5,7 +5,7 @@
 | Document | FEATURE_MATRIX.md |
 | Status | **Reconciled** — reflects the code that exists in this repository today |
 | Version | 0.1.0 |
-| Last updated | 2026-10-18 |
+| Last updated | 2026-10-19 |
 
 > **Read this first.** This matrix is the single source of truth for feature status. It was written during planning as all-`Planned` and has now been reconciled against the running code and the passing test suites (see [FINAL_ACCEPTANCE_REPORT.md](./FINAL_ACCEPTANCE_REPORT.md) and [TEST_PLAN.md](./TEST_PLAN.md)). Every `Verified` cell is backed by a test or command that was actually run; every gap is stated explicitly rather than implied.
 
@@ -20,7 +20,7 @@
 | `Out of scope` | Excluded on purpose and documented. |
 | `n/a` | Not applicable to that column. |
 
-**Verification totals:** 88 automated tests pass — 18 shared unit, 48 server integration, 20 browser e2e specs (including 2 auth-setup tests). All 12 required journeys pass integration-side; 5 also pass in-browser.
+**Verification totals:** 119 automated tests pass — 18 shared unit, 69 server integration, 32 browser e2e specs (30 journeys + 2 auth-setup). All 12 required journeys pass integration-side; 8 also pass in-browser (login, realtime, edit/delete, friends, DM, voice, media, slash commands/webhooks).
 
 ---
 
@@ -122,9 +122,9 @@
 | Reports | Moderation | Moderation | Verified (basic) | Not built | Unverified | Basic queue only |
 | Auto-mod rules | Moderation | Messaging | Out of scope | Not built | n/a | — |
 | Raid detection / incident alert mode | Moderation | — | Out of scope | n/a | n/a | — |
-| Slash commands (first-party) | Integrations | Applications | Verified (routes) | Not built | Unverified | `/api/commands`, `/api/interactions`; no UI |
-| Incoming webhooks | Integrations | Channels | Verified (routes) | Not built | Unverified | Create + execute endpoints; no UI |
-| Webhook request signing (HMAC-SHA256) | Integrations/Security | Webhooks | Unverified | n/a | Unverified | Not asserted |
+| Slash commands (first-party) | Integrations | Commands | Verified | Verified | Verified (integration + e2e) | `/api/commands`, `/api/interactions`; autocomplete + ephemeral results UI; `/ping /help /shrug /me /user /server /nick /slowmode /timeout /poll /topic` |
+| Incoming webhooks | Integrations | Channels | Verified | Verified | Verified (integration + e2e) | Create/rotate/disable/rename/test/delete + one-time token reveal UI; delivery `POST /api/webhooks/:id/:token`; delivery history |
+| Webhook request signing (HMAC-SHA256) | Integrations/Security | Webhooks | Not built | n/a | n/a | Bearer URL token only; no request signature (documented, not faked) |
 | Third-party bots / OAuth2 apps | Integrations | — | Out of scope | n/a | n/a | — |
 | Voice join/leave + participant state | Voice | Channels, gateway | Verified | Verified | Verified (integration J9 + e2e) | `VOICE_STATE_UPDATE` |
 | Mesh WebRTC audio (getUserMedia) | Voice | Signaling | Verified | Verified | Verified (e2e) | **Audio only**; cap ~8 |
@@ -150,7 +150,7 @@
 | Accessibility (WCAG 2.1 AA target) | Frontend | All UI | n/a | Partial | Unverified | Dialog roles/Escape/keyboard; no axe run |
 | i18n readiness (t(), Intl) | Frontend | All UI | n/a | Not built | n/a | en-US only |
 | Unit tests (`@nebula/shared`, server units) | Testing | — | n/a | n/a | Verified (18) | Vitest |
-| Integration tests (server + real PG/Redis) | Testing | Compose | n/a | n/a | Verified (39) | Real Fastify + Socket.IO |
+| Integration tests (server + real PG/Redis) | Testing | Compose | n/a | n/a | Verified (69) | Real Fastify + Socket.IO |
 | End-to-end tests (Playwright) | Testing | Web+server | n/a | n/a | Verified (17) | +2 auth-setup tests; journey coverage in TEST_PLAN §9 |
 | Realtime multi-client tests | Testing | Gateway | n/a | n/a | Verified (e2e) | Two Chromium contexts |
 | Authorization/security tests | Testing | Permissions | n/a | n/a | Verified (14) | Horizontal + vertical cases |
@@ -178,9 +178,9 @@ Foundation (monorepo, config, IDs, errors, DB/Redis, logging)
 
 ## Reconciliation summary
 
-- **Verified end-to-end (server + browser):** auth/sessions, permissions, guilds/roles/channels/overwrites, text messaging (send/edit/delete/reply/react/pin/typing/search/markdown/mentions), friends/blocks, DMs, **group DMs with participant management**, **threads**, **client-side routing (deep links/history/404)**, media upload + authorized access, moderation, realtime, and **audio** voice.
-- **Backend exists, no UI (labelled "Verified (routes) / Not built"):** slash commands, webhooks, message purge, avatar/icon upload.
-- **Not built:** camera video, screen share, server mute/deafen/move UI, change password, account delete,  channel reorder, thumbnails, per-channel notification overrides, OS notifications, light theme, 2FA enrollment, CI config, production containers, load tests.
+- **Verified end-to-end (server + browser):** auth/sessions, permissions, guilds/roles/channels/overwrites, text messaging (send/edit/delete/reply/react/pin/typing/search/markdown/mentions), friends/blocks, DMs, **group DMs with participant management**, **threads**, **client-side routing (deep links/history/404)**, **first-party slash commands (autocomplete/execute/ephemeral results/polls/topic)**, **incoming webhooks (lifecycle UI + delivery/security)**, media upload + authorized access, moderation, realtime, and **audio** voice.
+- **Backend exists, no UI (labelled "Verified (routes) / Not built"):** message purge, avatar/icon upload.
+- **Not built:** camera video, screen share, server mute/deafen/move UI, change password, account delete, channel reorder, webhook HMAC request signing, thumbnails, per-channel notification overrides, OS notifications, light theme, 2FA enrollment, CI config, production containers, load tests.
 - **Blocked:** TURN (cross-NAT voice); mail infra (verification/reset); multi-node realtime (Redis adapter); TLS termination.
 - **Out of scope (documented):** voice E2E encryption, SFU, push, auto-mod, raid detection, third-party bots/OAuth2, email verification/reset.
 

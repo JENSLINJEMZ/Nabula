@@ -5,9 +5,9 @@
 | Document | TEST_PLAN.md |
 | Status | **Reconciled** — the suites exist and pass; results recorded in §14 |
 | Version | 0.1.0 |
-| Last updated | 2026-10-17 |
+| Last updated | 2026-10-19 |
 
-> Status note: this plan was written before any code existed. It has now been **reconciled against the running implementation**: 56 automated tests exist and pass (18 unit, 27 integration, 11 browser e2e). Section §14 records the actual, executed results and the deviations from the plan. Anything not covered by a real run is called out there and in [FEATURE_MATRIX.md](./FEATURE_MATRIX.md); no result is cited as a pass unless it came from an actual run. Voice media assertions that cannot run are **skipped with a reason**, never reported as passing.
+> Status note: this plan was written before any code existed. It has now been **reconciled against the running implementation**: 119 automated tests exist and pass (18 unit, 69 integration, 32 browser e2e — 30 specs + 2 auth-setup). Section §14 records the actual, executed results and the deviations from the plan. Anything not covered by a real run is called out there and in [FEATURE_MATRIX.md](./FEATURE_MATRIX.md); no result is cited as a pass unless it came from an actual run. Voice media assertions that cannot run are **skipped with a reason**, never reported as passing.
 
 ---
 
@@ -52,7 +52,8 @@ Nebula uses a pragmatic test pyramid:
 - Repository SQL correctness and index-usage sanity (`EXPLAIN` on the hot message query).
 - Gateway: `READY`, room join/leave, dispatch scoping, `RESUME`, backpressure coalescing.
 - Upload pipeline: magic bytes, size, dimensions, quota, download headers.
-- Webhook signature verification.
+- Webhook delivery: token auth, bound-channel enforcement, disable/rotate/delete, idempotency, rate limit, secret non-exposure.
+- Slash commands: registry metadata, argument validation, permission gating, idempotent invocation.
 
 ### 2.3 E2E test scope
 The 12 journeys (§4), realtime multi-client behavior, reconnection/duplicates, and accessibility smoke. E2E drives only the public UI/API; it does not reach into the DB except for seeding.
@@ -320,20 +321,30 @@ S1/S2 block a milestone exit. S3/S4 are tracked but may ship with a documented l
 
 | Suite | Location | Tests | Result |
 | --- | --- | --- | --- |
+| Suite | Location | Tests | Result |
+| --- | --- | --- | --- |
 | Shared unit | `packages/shared/test/{permissions,snowflake}.test.ts` | 18 | **18/18 pass** |
 | Server integration — journeys | `apps/server/test/journeys.test.ts` | 13 | **13/13 pass** |
 | Server integration — security | `apps/server/test/security.test.ts` | 14 | **14/14 pass** |
 | Server integration — threads | `apps/server/test/threads.test.ts` | 4 | **4/4 pass** |
-| Server integration — forwarding | `apps/server/test/forwarding.test.ts` | 9 | **9/9 pass** | authorization, blocks, slowmode, self-forward, DM targets | See §9.3 |
+| Server integration — forwarding | `apps/server/test/forwarding.test.ts` | 9 | **9/9 pass** |
 | Server integration — group DMs | `apps/server/test/group-dms.test.ts` | 8 | **8/8 pass** |
-| Browser end-to-end | `apps/web/e2e/*.spec.ts` | 20 | **20/20 pass** (18 specs + 2 auth-setup) |
-| **Total** | | **88** | **88/88 pass** |
+| Server integration — slash commands | `apps/server/test/commands.test.ts` | 9 | **9/9 pass** |
+| Server integration — webhooks | `apps/server/test/webhooks.test.ts` | 12 | **12/12 pass** |
+| Browser e2e — core journeys | `apps/web/e2e/app.spec.ts` | 7 | **7/7 pass** |
+| Browser e2e — realtime & social | `apps/web/e2e/realtime.spec.ts` | 4 | **4/4 pass** |
+| Browser e2e — routing | `apps/web/e2e/routing.spec.ts` | 4 | **4/4 pass** |
+| Browser e2e — slash commands | `apps/web/e2e/slash-commands.spec.ts` | 4 | **4/4 pass** |
+| Browser e2e — webhooks | `apps/web/e2e/webhooks.spec.ts` | 8 | **8/8 pass** |
+| Browser e2e — forwarding/DMs/threads | `apps/web/e2e/{forwarding,group-dms,threads}.spec.ts` | 3 | **3/3 pass** |
+| Browser e2e — auth setup | `apps/web/e2e/auth.setup.ts` | 2 | **2/2 pass** |
+| **Total** | | **119** | **119/119 pass** |
 
 Static gates (also executed): `npm run typecheck` (3 workspaces clean) and `npm run build` (production bundle produced).
 
 ### 14.2 Journey → test mapping
 
-`J1`–`J12` in `apps/server/test/journeys.test.ts` cover the 12 required journeys exactly; `J5` also carries the edit/delete/reply/react/search assertions. Browser (Playwright) coverage exists for J1, J4, J5, J7, J8, J9, J10 (login, realtime multi-client, edit/delete, friend search, DM, voice join, attachment), plus UI flows for user/server/channel settings and search.
+`J1`–`J12` in `apps/server/test/journeys.test.ts` cover the 12 required journeys exactly; `J5` also carries the edit/delete/reply/react/search assertions. Browser (Playwright) coverage exists for J1, J4, J5, J7, J8, J9, J10 (login, realtime multi-client, edit/delete, friend search, DM, voice join, attachment), plus UI flows for user/server/channel settings, search, **slash commands, and the webhook console**.
 
 ### 14.3 Security cases actually covered
 
@@ -346,13 +357,17 @@ Salted-scrypt storage; hardened session cookies (HttpOnly/SameSite=Lax); CSRF re
 - **Load/perf:** not built.
 - **Voice:** tested with Chromium fake media devices (real `getUserMedia` join → "Voice connected") plus signalling relay in `J9`; camera/screen-share are not implemented, so no media assertions for them.
 - **Browser journey coverage:** 7 of the 12 journeys currently have dedicated Playwright assertions (J1, J4, J5, J7, J8, J9, J10); the rest are server-verified. Closing this gap is the first test-side next step in the acceptance report.
-- **New this cycle:** two security tests for the added `/api/users/search` endpoint (auth required; no private-field leakage); 4 integration tests for threads (creation, posting, private-thread membership enforcement, archive/join/leave); 8 integration tests for group DMs (creation with participant validation, block enforcement, adds/removals, 10-participant cap, ownership transfer, closure below two members, realtime fan-out with live channel-room joins); browser specs for client routing (deep links, back/forward, 404), threads (create/post/close/deep-link), and group DMs (create, realtime sidebar update, message delivery, leave-closes-group).
+- **Earlier cycle:** browser specs for client routing (deep links, back/forward, 404), threads (create/post/close/deep-link), and group DMs (create, realtime sidebar update, message delivery, leave-closes-group).
+- **This cycle — slash commands & webhooks:** 9 integration tests for first-party slash commands (`apps/server/test/commands.test.ts`: registry metadata, argument validation, permission gating incl. unauthorized `/topic`, idempotent invocation, ephemeral vs posted results) and 12 for webhooks (`apps/server/test/webhooks.test.ts`: create/rotate/disable/delete, token hashing + non-exposure, bound-channel enforcement, idempotency, per-webhook rate limit, audit entries 50/51/52). Browser specs `apps/web/e2e/slash-commands.spec.ts` (4: autocomplete + keyboard selection, execute + results, invalid-argument + permission-denied responses, poll creation/interaction + topic change) and `apps/web/e2e/webhooks.spec.ts` (8: UI lifecycle create→rotate→disable/enable→delete, authenticated delivery appearing exactly once with idempotency + realtime, invalid-secret rejection, revoked/disabled non-delivery, secret non-exposure in API + logs, rate limit, unauthorized management, SSRF/redirect rejection).
+- **Config fix this cycle:** `RATE_LIMIT_MAX` was attached to the Vite web-server entry instead of the **API** server entry in `apps/web/playwright.config.ts`, so the API ran at the 600/min default and self-throttled the later specs. The API server now starts with `RATE_LIMIT_MAX=5000` for the E2E run.
 
 ### 14.5 Commands
 
 ```bash
 npm run typecheck       # 3 workspaces
-npm test                # shared (18) + server (39)
+npm test                # shared (18) + server (69)
 npm run build           # web bundle
-npm run test:e2e        # Playwright (17 + 2 auth setup) — dev stack + seeded DB must be running
+npm run test:e2e        # Playwright (30 + 2 auth setup) — dev stack + seeded DB must be running
 ```
+
+> The E2E config starts the **API** server with `RATE_LIMIT_MAX=5000` so the global limiter does not throttle later specs. If you run against a manually started API server, export that variable yourself.

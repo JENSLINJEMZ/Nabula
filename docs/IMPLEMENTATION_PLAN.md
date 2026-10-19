@@ -3,9 +3,9 @@
 | Field | Value |
 | --- | --- |
 | Document | IMPLEMENTATION_PLAN.md |
-| Status | **In progress** — M1–M4 core implemented and verified; routing, threads, and group DMs delivered this cycle (see [FEATURE_MATRIX.md](./FEATURE_MATRIX.md) for what is verified vs not built) |
+| Status | **In progress** — M1–M4 core implemented and verified; routing, threads, group DMs, and (this cycle) first-party slash commands + incoming webhooks delivered and e2e-tested (see [FEATURE_MATRIX.md](./FEATURE_MATRIX.md) for what is verified vs not built) |
 | Version | 0.1.0 |
-| Last updated | 2026-10-18 |
+| Last updated | 2026-10-19 |
 
 > Status note: milestone exit criteria are objective gates; a milestone is not "done" until its criteria and the associated tests in [TEST_PLAN.md](./TEST_PLAN.md) pass. Tasks marked **Done** have passing tests; everything else below is planned.
 
@@ -166,22 +166,22 @@ Entire milestone. SFU and E2E voice are explicitly out of scope (documented).
 Operational and extensibility features: moderation (kick/ban/timeout/audit/purge), first-party slash commands, incoming webhooks, and the full settings surface.
 
 ### Deliverables
-- Schema: `webhooks`, `applications`, `slash_commands`, `reports`, plus audit-log completeness.
+- Schema: `webhooks` (+ delivery/idempotency tables), `webhook_bot_user`, `reports`, plus audit-log completeness. (There is no `applications`/`slash_commands` table — commands are a first-party server-side registry.)
 - Moderation: timeout (`communication_disabled_until` + permission effect), ban/unban with reason, message purge, audit-log read API + UI, reports queue.
-- Integrations: slash command registration/invocation, incoming webhook create/execute with HMAC signing, first-party command set (e.g. `/help`, `/ping`, `/serverinfo`, `/userinfo`, `/purge`).
+- Integrations: **first-party slash commands** (registry, argument parsing/validation, permission gate, idempotent invocation, ephemeral vs posted results) and **incoming webhooks** (create/rotate/disable/rename/test/delete, one-time token reveal, public delivery route, delivery history). Webhook auth is a **bearer URL token stored only as a SHA-256 hash** — **no HMAC signing**.
 - Settings: user settings (appearance/notifications/voice/privacy/language), guild settings, channel settings, notification-level controls.
 
 ### Exit criteria
 - Timeout permission effect verified (only `VIEW_CHANNEL`+`READ_MESSAGE_HISTORY`; owner/`ADMINISTRATOR` exempt). **[VERIFIED]**
-- Every privileged action writes an audit entry with actor/target/action/reason; audit is append-only.
-- W-01…W-03 webhook signature cases pass; a validly-signed call posts to the bound channel only.
-- Slash command invocation posts a message (public/ephemeral) and is gated by `USE_APPLICATION_COMMANDS`.
+- Every privileged action writes an audit entry with actor/target/action/reason; audit is append-only. **[VERIFIED: webhook create/update/delete = 50/51/52]**
+- W-01…W-07 webhook cases pass (token auth, bound channel, disable/rotate/delete, idempotency, rate limit, secret non-exposure, no URL fetch); a valid call posts to the bound channel only. **[VERIFIED: integration + e2e]**
+- Slash command invocation returns an ephemeral result or posts a message, gated by the command's permission (e.g. `/topic` needs `MANAGE_CHANNELS`). **[VERIFIED: integration + e2e]**
 
 ### Dependencies
 M4 (realtime, notifications); permission pieces from M2.
 
-### Remaining work
-Entire milestone. Auto-mod is limited to naive rules or deferred; third-party bots/OAuth2 are out of scope.
+### Status
+**Built and tested** (integration + browser e2e). Remaining gaps: no third-party application/OAuth2 platform; no webhook HMAC signing; auto-mod limited/deferred. See [FEATURE_MATRIX.md](./FEATURE_MATRIX.md).
 
 ---
 
@@ -307,13 +307,13 @@ Tasks are ordered so each row can start only after the rows it depends on. IDs a
 ### Operate & extend (M6)
 | ID | Task | Depends on |
 | --- | --- | --- |
-| T6.1 | Schema: webhooks, applications, slash_commands, reports | T2.3 |
+| T6.1 | Schema: webhooks (+ deliveries/idempotency), webhook bot user, reports | T2.3 |
 | T6.2 | Timeout + ban/unban + purge + audit read API/UI | T2.4, T2.11, T3.2 |
 | T6.3 | Reports queue API/UI | T6.1, T6.2 |
-| T6.4 | Incoming webhooks + HMAC signing + execute route | T6.1, T2.4 |
-| T6.5 | Slash commands (registration + invocation + first-party set) | T6.1, T3.5 |
+| T6.4 | Incoming webhooks: create/rotate/disable/delete + bearer-token delivery route (no HMAC) | T6.1, T2.4 |
+| T6.5 | First-party slash commands: registry + invocation + permission gate | T6.1, T3.5 |
 | T6.6 | User/guild/channel settings surfaces | T1.16, T4.10 |
-| T6.7 | Moderation/webhook test cases (W-01…W-03, timeout effect) | T6.2, T6.4 |
+| T6.7 | Moderation/webhook test cases (W-01…W-07, timeout effect) | T6.2, T6.4 |
 
 ### Harden & ship (M7)
 | ID | Task | Depends on |

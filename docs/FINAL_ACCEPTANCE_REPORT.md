@@ -5,7 +5,7 @@
 | Document | FINAL_ACCEPTANCE_REPORT.md |
 | Status | **Verified against running code** (see evidence below) |
 | Version | 0.1.0 |
-| Date | 2026-10-18 |
+| Date | 2026-10-19 |
 | Scope | `apps/server` (Fastify + Socket.IO + Postgres + Redis), `apps/web` (React + Vite), `packages/shared` |
 | Verification basis | Every result below was produced by a command that was actually executed in this workspace. Nothing here is a projection. |
 
@@ -18,9 +18,9 @@
 | Check | Command | Result |
 | --- | --- | --- |
 | Typecheck (all workspaces) | `npm run typecheck` | **PASS** — `@nebula/shared`, `@nebula/server`, `@nebula/web` all clean |
-| Production web build | `npm run build` | **PASS** — 1653 modules; `index-*.js` 374.19 kB (110.70 kB gzip), `index-*.css` 25.66 kB (5.44 kB gzip) |
-| Backend start | `npm start` (cwd `apps/server`) | **PASS** — logs `nebula server ready`, `GET /api/health` → `{"ok":true,"storage":"local"}` |
-| Migrations | applied on boot | **PASS** — `database already up to date, migrations: 3` (30 tables) |
+| Production web build | `npm run build` | **PASS** — 1654 modules; `index-*.js` 392.76 kB (110.70 kB gzip), `index-*.css` 25.99 kB (5.44 kB gzip) |
+| Backend start | `npm start` (cwd `apps/server`) | **PASS** — server ready, `GET /api/health` → `{"ok":true,"storage":"local"}` |
+| Migrations | applied on boot | **PASS** — migrations: 5 (32 tables) |
 
 ---
 
@@ -33,14 +33,16 @@
 | Server integration (security) | `apps/server/test/security.test.ts` | 14 | **14/14 pass** |
 | Server integration (threads) | `apps/server/test/threads.test.ts` | 4 | **4/4 pass** |
 | Server integration (group DMs) | `apps/server/test/group-dms.test.ts` | 8 | **8/8 pass** |
-| Browser end-to-end (Playwright, real Chromium) | `apps/web/e2e/*.spec.ts` | 20 | **20/20 pass** (18 specs + 2 auth-setup) |
-| **Total** | | **76** | **76/76 pass** |
+| Server integration (slash commands) | `apps/server/test/commands.test.ts` | 9 | **9/9 pass** |
+| Server integration (webhooks) | `apps/server/test/webhooks.test.ts` | 12 | **12/12 pass** |
+| Browser end-to-end (Playwright, real Chromium) | `apps/web/e2e/*.spec.ts` | 32 | **32/32 pass** (30 specs + 2 auth-setup) |
+| **Total** | | **119** | **119/119 pass** |
 
 Commands:
 
 ```bash
-npm test                 # shared (18) + server (39)
-npm run test:e2e         # Playwright — needs the dev stack + seeded DB running
+npm test                 # shared (18) + server (69)
+npm run test:e2e         # Playwright (30 specs + 2 auth-setup) — needs the dev stack + seeded DB running
 ```
 
 The e2e run also asserts **zero browser console errors and zero uncaught page errors** across the exercised journeys.
@@ -49,7 +51,7 @@ The e2e run also asserts **zero browser console errors and zero uncaught page er
 
 ## 3. The 12 required end-to-end journeys
 
-Each journey has an automated integration test (`J1`–`J12` in `apps/server/test/journeys.test.ts`). Five additionally have a real-browser test. "Browser" means a Playwright test drove two/one real Chromium contexts against the live stack.
+Each journey has an automated integration test (`J1`–`J12` in `apps/server/test/journeys.test.ts`). Seven additionally have a real-browser test. "Browser" means a Playwright test drove two/one real Chromium contexts against the live stack.
 
 | # | Journey | Server integration | Browser e2e | Notes |
 | --- | --- | --- | --- | --- |
@@ -66,15 +68,15 @@ Each journey has an automated integration test (`J1`–`J12` in `apps/server/tes
 | 11 | Block restrictions | ✅ J11 | — | DM/friend-request suppression enforced |
 | 12 | Unauthorized access + moderation denied | ✅ J12 (+ security: IDOR, self-ban, search leak) | — | Horizontal + vertical escalation covered |
 
-**All 12 journeys pass at the server/integration level. 5/12 additionally pass in a real browser.** The remaining browser gaps (invite-join, channel creation, role/overwrite editing, block UI, moderation denial UI) are implemented and covered server-side, but do not yet have dedicated Playwright assertions — see §9.
+**All 12 journeys pass at the server/integration level. 7/12 additionally pass in a real browser.** The remaining browser gaps (invite-join, channel creation, role/overwrite editing, block UI, moderation denial UI) are implemented and covered server-side, but do not yet have dedicated Playwright assertions — see §9.
 
-Additional browser-verified UI flows: user settings (profile/sessions), server settings (roles/members/invites/bans/audit tabs), channel settings modal, search panel, unread/mention badges, voice join/leave.
+Additional browser-verified UI flows: user settings (profile/sessions), server settings (roles/members/invites/bans/audit tabs), channel settings modal, search panel, unread/mention badges, voice join/leave, **first-party slash command autocomplete and execution**, **webhook lifecycle console (create/rotate/disable/enable/test/delete)**.
 
 ---
 
 ## 4. Verified features (test or command exists and passed)
 
-- **Foundation** — npm-workspaces monorepo; TS/ESM; Zod-validated env; raw-SQL migrations (3, 30 tables); snowflake IDs (unit-tested for order/monotonicity/uniqueness/validation); structured logging; `/api/health` + `/api/health/db`; per-route + global rate limiting (security-tested); stable error envelope.
+- **Foundation** — npm-workspaces monorepo; TS/ESM; Zod-validated env; raw-SQL migrations (5, 32 tables); snowflake IDs (unit-tested for order/monotonicity/uniqueness/validation); structured logging; `/api/health` + `/api/health/db`; per-route + global rate limiting (security-tested); stable error envelope.
 - **Auth & sessions** — register/login/logout/logout-all; scrypt hashing (salted, verified by test); Postgres-backed sessions; HttpOnly + SameSite=Lax cookies (tested); CSRF double-submit (rejected-without-token tested); session list/revoke/logout-all (UI verified).
 - **Permissions** — bitfield (bits 0–52), base resolution, ADMINISTRATOR collapse, role OR-ing, overwrite precedence, member-overwrite-last, implicit rules, timeout stripping — **14 unit tests**; hierarchy + overwrite enforcement integration-tested.
 - **Users** — public profile projection (private fields omitted — tested), profile edit, presence (online/idle/dnd/invisible), custom status, **username search** (prefix; auth-required; no email leak — 2 new tests this session).
@@ -93,6 +95,8 @@ Additional browser-verified UI flows: user settings (profile/sessions), server s
 - **Realtime** — Socket.IO gateway, per-user/guild/channel rooms, authorization-scoped fan-out, presence, automatic channel subscription on connect, reconnect, ordering + dedup.
 - **Voice** — join/leave + participant state, WebRTC **mesh audio** over signaling relay, self mute/deafen (browser join verified with fake media devices).
 - **Frontend** — design tokens + component primitives; responsive app shell (guild rail, guild/Home sidebars, member list, mobile drawer); Zustand store with optimistic updates; last-view persistence; accessible modals (Escape/dialog roles); reduced-motion setting.
+- **First-party slash commands** — autocomplete, argument coercion, permission checks (incl. `/topic` requires `MANAGE_CHANNELS`, `/timeout` requires `MODERATE_MEMBERS`, `/nick` requires `CHANGE_NICKNAME`), ephemeral informational results, commands that post (`/poll`, `/shrug`, `/me`), idempotent invocation (`invocationId`), rate limit per user (20/10s). **Integration + e2e verified.**
+- **Incoming webhooks** — create (token shown once), rotate (new token once), update (name/avatar/disable), delete, test delivery (`/execute`), delivery history, per-webhook delivery rate limit (30/10s), idempotency via `X-Idempotency-Key`, bound-channel enforcement, disabled/unknown/invalid-token handling, audit logging (50/51/52), token stored as SHA-256 hash and never exposed in list/detail/delivery responses. **API + UI + integration + e2e verified.** No HMAC signing (bearer URL token only). No outbound URL fetching.
 
 ---
 
@@ -104,8 +108,7 @@ These are implemented and were exercised manually/in-browser during development,
 - Member-profile moderation actions from the UI (nickname/timeout/kick/ban/role assign) — backend is tested, UI is not.
 - Notification center UI actions; pins panel; DM/friend list UI beyond the e2e flows.
 - Presence transitions beyond the online path; custom-status rendering.
-- Slash-command and webhook **backend** endpoints (`/api/commands`, `/api/interactions`, `/api/channels/:id/webhooks`, `POST /api/webhooks/:webhookId/:token`) — routes exist; **no UI**, not covered by tests.
-- `POST /api/channels/:id/messages/bulk-delete` (purge) — route exists; no UI.
+- Slash-command and webhook **backend endpoints** are now covered by integration + e2e tests; **UI exists** for autocomplete/ephemeral results and for webhook management (create/rotate/disable/enable/test/delete/deliveries). No third-party application/OAuth2 platform; webhook HMAC signing not built. No automatic test for the purge UI beyond server behavior.
 - Storage driver abstraction is local-disk only; S3 path is documented, not implemented.
 
 ---
@@ -121,7 +124,9 @@ The following are deliberately absent. Where the backend endpoint exists but has
 | SFU scaling (mediasoup/LiveKit) | Not built (mesh only; documented scaling path). |
 | Voice E2E encryption | Not built (in-transit DTLS-SRTP only). |
 | Server mute/deafen/move from UI | Not built (no UI; `MUTE_MEMBERS` etc. exist in the bitfield). |
-| Slash commands UI / webhook UI | Not built (backend routes only). |
+| Slash commands UI / webhook UI | **Built.** Autocomplete + ephemeral results; webhook console in channel settings (create/rotate/disable/enable/test/delete/deliveries). |
+| Webhook request signing (HMAC) | **Not built.** Delivery authenticates with a bearer URL token (SHA-256 hashed); there is no `X-Nebula-Signature`/`signing_secret`. |
+| Webhook rename UI | **API-only.** `PATCH /api/guilds/:id/webhooks/:wid` accepts `name`; the console only exposes create/rotate/disable/enable/avatar/test/delete. |
 | Avatar / guild-icon upload UI | Not built (backend routes exist; UI states "avatar is generated"). |
 | Change password / account delete | Not built (no routes, no UI). |
 | Email verification / password reset | Out of scope (no SMTP); returns `MAIL_NOT_CONFIGURED`, never simulated. |
@@ -164,7 +169,7 @@ The following are deliberately absent. Where the backend endpoint exists but has
 - Message search is access-scoped and was tested to not leak inaccessible guilds.
 - No 2FA and no email verification means account takeover resistance relies on password strength + rate limiting only.
 - Block enforcement suppresses DMs and friend requests; the message-visibility rule is a Nebula design choice (documented).
-- Webhook token endpoints exist but their signing scheme is not covered by tests; treat webhooks as experimental.
+- Webhooks authenticate with a **bearer URL token** stored only as a SHA-256 hash; there is no request signing. Wrong/unknown token → `401`, disabled → `403`, deleted → `404`, destination cannot be redirected from the body, delivery idempotent per `X-Idempotency-Key`, limited to 30/10s, and no outbound URL is fetched (no SSRF). These are covered by integration + e2e tests. Treat the webhook URL as a secret.
 
 ---
 
@@ -199,7 +204,7 @@ Seeded accounts (`nebula_alice` owner, `nebula_bob`, `nebula_carol`) share the d
 
 ## 10. Migrations & deployment
 
-- **Migrations** are raw forward-only SQL applied by `npm run db:migrate` (idempotent; boot also applies them). 3 migrations → 30 tables. No automatic down-migrations; rollback is by restoring a snapshot.
+- **Migrations** are raw forward-only SQL applied by `npm run db:migrate` (idempotent; boot also applies them). 5 migrations → 32 tables. No automatic down-migrations; rollback is by restoring a snapshot.
 - **Deployment today**: run the API process (`apps/server`) and serve the built SPA (`apps/web/dist`) behind a reverse proxy that terminates TLS; point `PUBLIC_WEB_ORIGIN` at the web origin and set `COOKIE_SECURE=true`.
 - **Not provided**: production Dockerfiles, orchestrator manifests, multi-node wiring, backup/restore automation. `docker-compose.yml` is a **dev** datastore only.
 
@@ -210,7 +215,8 @@ Seeded accounts (`nebula_alice` owner, `nebula_bob`, `nebula_carol`) share the d
 - Voice is **audio-only mesh** (≤ ~8 participants by design) and needs TURN for real network conditions.
 - No OS notifications; notifications are in-app.
 - Only the dark theme is styled; the theme field is present but light is unimplemented.
-- Slash commands, webhooks, purge and avatar/icon upload have endpoints but no UI.
+- Message purge (`POST /api/channels/:id/messages/bulk-delete`) and avatar/icon upload have endpoints but no UI.
+- Slash commands and webhooks **do** have UI + e2e coverage; webhook **rename** is API-only, and webhook HMAC request signing is not built.
 - Snowflake "monotonic per worker only"; multi-process ID allocation assumes distinct worker ids.
 - Search uses the DB's matching with access scoping; ranking/recent-index lag is not tuned.
 
@@ -219,10 +225,10 @@ Seeded accounts (`nebula_alice` owner, `nebula_bob`, `nebula_carol`) share the d
 ## 12. Exact next steps (prioritized)
 
 1. **Wire coturn + `VITE_ICE_SERVERS`** and re-test voice across NAT (closes the only *blocked* user-facing capability).
-2. **Add Playwright assertions for the 7 remaining journeys** (invite join, channel create, role/overwrite edit, block UI, moderation-denied UI) to move 12/12 browser coverage.
-3. **Decide on the remaining "backend-only" features**: build minimal UI for slash commands / webhooks / avatar upload, or explicitly mark them out of scope in `FEATURE_MATRIX.md`.
+2. **Add Playwright assertions for the 5 remaining journeys** (invite join, channel create, role/overwrite edit, block UI, moderation-denied UI) to move 12/12 browser coverage.
+3. **Decide on the remaining "backend-only" features** (avatar/icon upload UI) or explicitly mark them out of scope in `FEATURE_MATRIX.md`. Slash-command and webhook UI have been built and are now covered by e2e.
 4. **Add camera video + screen share** (`getUserMedia({video})`, `getDisplayMedia`) with the documented unsupported-browser fallback.
-5. **Typecheck the e2e specs** (add a `tsconfig.e2e.json` including `e2e/**` + Node types) so CI catches spec drift.
+5. **Typecheck the e2e specs** (add a `tsconfig.e2e.json` including `e2e/**` + Node types) so CI catches spec drift — the web `tsconfig.json` only includes `src/**`, so the new slash-command/webhook specs are currently only validated by Playwright's runtime.
 6. **Production hardening**: real `SESSION_SECRET`, `COOKIE_SECURE=true`, TLS proxy, production Dockerfiles, and enable the Redis socket.io adapter for multi-node.
 7. **Load/perf harness** for gateway fan-out and message throughput.
 
@@ -236,10 +242,27 @@ npm install
 cp .env.example apps/server/.env
 npm run db:migrate && npm run seed
 npm run typecheck          # 3 workspaces clean
-npm test                   # shared 18 + server 39
+npm test                   # shared 18 + server 69
 npm run build              # web production bundle
 # with the dev stack running (npm run dev:server & npm run dev:web):
 npm run test:e2e           # Playwright — a setup project logs in as alice+bob once (2 logins)
                            # and reuses storage state, so the dev login rate limit (20/min)
                            # is not tripped by repeated runs.
+                           # The config starts the API server with RATE_LIMIT_MAX=5000 so the
+                           # global limiter does not throttle the later specs.
 ```
+
+> **Reuse a running API server?** Export `RATE_LIMIT_MAX=5000` yourself before `npm run dev:server`; otherwise the API runs at the 600/min default and the webhook/command specs can hit `429`.
+
+---
+
+## 14. This cycle's additions (2026-10-19)
+
+Two new browser suites were written against the existing slash-command and webhook implementations:
+
+- **`apps/web/e2e/slash-commands.spec.ts`** (4 tests): autocomplete via keyboard navigation; execute + ephemeral result; invalid-argument + permission-denied responses; poll create/interaction + topic change (including an unauthorized topic attempt). Assertions use `data-testid` hooks (`command-result`, `message-embed`) and per-test isolation.
+- **`apps/web/e2e/webhooks.spec.ts`** (8 tests): create → rotate → disable/enable → delete lifecycle (UI + API); authenticated delivery appearing **exactly once** with idempotency replay + realtime fan-out; invalid-secret rejection; revoked/disabled non-delivery; secret not present in any API response or server log; per-webhook rate limit → `429`; unauthorized management → `403`; SSRF/redirect attempt rejected. Public delivery is driven from an explicitly cookie-less request context; authenticated API assertions use `page.request` sharing the user's cookies + CSRF header. Per-test isolated channels are deleted in `finally`.
+
+**Infra fix:** `apps/web/playwright.config.ts` had `RATE_LIMIT_MAX` attached to the **Vite** webServer entry; it now applies to the **API** server entry (`../server`), so the API no longer self-throttles at 600/min.
+
+**Known gaps in this area:** webhook **rename** is API-only (no console control); there is **no HMAC request signing** (bearer URL token only); `apps/web/tsconfig.json` excludes `e2e/**`, so the new specs are not covered by `npm run typecheck`.

@@ -3,17 +3,17 @@
 | Field | Value |
 | --- | --- |
 | Document | API_SPECIFICATION.md |
-| Status | **Implemented** — 72 REST endpoints + the Socket.IO gateway exist and are integration-tested (see [FINAL_ACCEPTANCE_REPORT.md](./FINAL_ACCEPTANCE_REPORT.md)); this document is the reference contract |
+| Status | **Implemented** — the REST API + Socket.IO gateway exist and are integration-tested (see [FINAL_ACCEPTANCE_REPORT.md](./FINAL_ACCEPTANCE_REPORT.md)); this document is the reference contract |
 | Version | 0.1.0 |
-| Last updated | 2026-10-17 |
+| Last updated | 2026-10-19 |
 
-> Status note: all routes and events below are **designed**. Discord-derived contracts are marked **[VERIFIED]**; independent choices are **[DESIGN]**.
+> Status note: all routes and events below are **implemented** unless marked otherwise. Discord-derived contracts are marked **[VERIFIED]**; independent choices are **[DESIGN]**. Where a documented endpoint was never built, it is marked **[NOT BUILT]** rather than implied to exist.
 
 ---
 
 ## 1. Conventions
 
-- **Base URL:** `http://localhost:4000/api/v1` (dev). All REST paths below are relative to `/api/v1`.
+- **Base URL:** `http://localhost:4000/api` (dev). All REST paths below are relative to `/api` (there is no `/v1` prefix).
 - **Realtime namespace:** Socket.IO namespace **`/gateway`** (default path `/socket.io`).
 - **IDs:** 64-bit snowflakes serialized as **strings** everywhere.
 - **Content types:** `application/json; charset=utf-8` for JSON; `multipart/form-data` for uploads.
@@ -21,8 +21,8 @@
 - **CSRF:** unsafe methods (`POST/PUT/PATCH/DELETE`) on cookie auth require header `X-CSRF-Token` matching the `nebula_csrf` cookie (double-submit). **[DESIGN]**
 - **Timestamps:** ISO-8601 UTC with milliseconds (e.g. `2026-10-17T12:00:00.000Z`).
 - **Pagination:** cursor by snowflake `id`. `?before=<id>&after=<id>&limit=1..100` where meaningful; responses include `{ items, has_more }`.
-- **Idempotency:** message creation accepts a client `nonce`; repeated sends with the same nonce return the original message.
-- **Rate limits:** enforced per user + per route bucket + a global bucket. Responses carry `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `X-RateLimit-Reset-After`, `X-RateLimit-Bucket`; a `429` carries `Retry-After` and a body `{ "error": { "code": "RATE_LIMITED" }, "retry_after": <seconds>, "global": <bool> }`. Header names and 429 semantics are modeled on Discord's documented scheme. **[VERIFIED: header format & 429]**
+- **Idempotency:** message creation accepts a client `nonce`; repeated sends with the same nonce return the original message. Webhook delivery accepts `X-Idempotency-Key` (scoped per webhook); a replay returns the original message with `duplicate: true`.
+- **Rate limits:** enforced per user + per route bucket + a global bucket. Responses carry `x-ratelimit-limit`, `x-ratelimit-remaining` and `x-ratelimit-reset`; a `429` carries a body `{ "error": { "code": "RATE_LIMITED" }, "details": { "retryAfterMs": <ms> } }`. **[VERIFIED: header format & 429]**
 - **Slowmode:** sending in a slowmode channel before the window returns `429` with `error.code = SLOWMODE_ACTIVE` and `retry_after` seconds; `BYPASS_SLOWMODE` holders are exempt. **[VERIFIED: bit 52]**
 
 ### 1.1 Error envelope
@@ -46,26 +46,33 @@ Every non-2xx JSON response:
 
 | Code | HTTP | Meaning |
 | --- | --- | --- |
-| `VALIDATION_ERROR` | 400 | Body/query failed Zod validation (`details.fields[]`) |
+| `VALIDATION_FAILED` | 400 | Body/query failed Zod validation (`details.field`) |
+| `INVALID_JSON` | 400 | Request body was not valid JSON |
+| `INVALID_SNOWFLAKE` | 400 | A supplied id was not a valid snowflake |
+| `CANNOT_DM_SELF` / `CANNOT_FRIEND_SELF` | 400 | Self-targeted social action |
+| `MESSAGE_TOO_LONG` / `MESSAGE_EMPTY` | 400 | Message content failed length/emptiness checks |
+| `UNSUPPORTED_CHANNEL_TYPE` | 400 | Action not valid for the channel type |
 | `UNAUTHENTICATED` | 401 | No/expired session |
 | `INVALID_CREDENTIALS` | 401 | Login username/password mismatch (no user enumeration) |
-| `INVALID_SIGNATURE` | 401 | Webhook HMAC verification failed |
-| `CSRF_FAILED` | 403 | Missing/invalid CSRF token |
+| `SESSION_EXPIRED` | 401 | The session backing the request has expired |
+| `INVALID_CSRF` | 403 | Missing/invalid CSRF token (double-submit) |
 | `FORBIDDEN` | 403 | Generic authorization failure (e.g. not a member) |
 | `MISSING_PERMISSIONS` | 403 | Lacks a required permission (`details.permission`) |
-| `BLOCKED` | 403 | Target relationship is blocked |
-| `NOT_FOUND` | 404 | Resource missing or hidden |
-| `CONFLICT` | 409 | Uniqueness conflict (`details.field` = `username`/`email`) |
+| `NOT_GUILD_MEMBER` / `CHANNEL_NOT_ACCESSIBLE` | 403 | No access to the guild/channel |
+| `HIERARCHY_VIOLATION` | 403 | Acting on a role/member equal-or-above your highest |
+| `BLOCKED` / `TARGET_BLOCKED_YOU` / `TARGET_BLOCKED_BY_YOU` | 403 | Blocked relationship |
+| `ACCOUNT_SUSPENDED` | 403 | Account is banned/suspended |
+| `NOT_FOUND` / `UNKNOWN_USER` / `UNKNOWN_GUILD` / `UNKNOWN_CHANNEL` / `UNKNOWN_MESSAGE` / `UNKNOWN_ROLE` / `UNKNOWN_INVITE` / `UNKNOWN_ATTACHMENT` | 404 | Resource missing or hidden |
+| `CONFLICT` / `ALREADY_FRIENDS` / `ALREADY_MEMBER` / `ALREADY_BLOCKED` / `LAST_OWNER` | 409 | State conflict (`details.field` where relevant) |
 | `PAYLOAD_TOO_LARGE` | 413 | Upload exceeds `MAX_UPLOAD_BYTES` |
 | `QUOTA_EXCEEDED` | 413 | Guild storage quota reached (`details.used`, `details.limit`) |
 | `UNSUPPORTED_MEDIA_TYPE` | 415 | Upload content-type not allowed |
-| `RATE_LIMITED` | 429 | Rate limit hit |
+| `RATE_LIMITED` | 429 | Rate limit hit (`details.retryAfterMs` for per-webhook / per-command buckets) |
 | `SLOWMODE_ACTIVE` | 429 | Channel slowmode active |
-| `INTERNAL_ERROR` | 500 | Unhandled error (never leaks internals) |
-| `FEATURE_NOT_IMPLEMENTED` | 501 | Documented-but-not-built feature |
-| `MAIL_NOT_CONFIGURED` | 503 | Email feature requested with no SMTP |
-| `STORAGE_UNAVAILABLE` | 503 | Object storage unavailable |
-| `DATABASE_UNAVAILABLE` | 503 | Primary Postgres unavailable |
+| `INTERNAL` | 500 | Unhandled error (never leaks internals) |
+| `UPSTREAM_UNAVAILABLE` | 503 | A required dependency (DB/Redis/storage/mail) is unavailable |
+
+> **Not built (documented):** `INVALID_SIGNATURE` (webhook HMAC), `FEATURE_NOT_IMPLEMENTED` (501), `MAIL_NOT_CONFIGURED` (503) and `STORAGE_UNAVAILABLE` (503) do not exist in the running server. Webhooks use a bearer URL token only (no request signing); email flows are not implemented.
 
 ---
 
@@ -266,22 +273,31 @@ Legend for **Auth**: `public` (no session), `session` (any authenticated user), 
 
 **Upload validation:** size ≤ `MAX_UPLOAD_BYTES`; magic-byte sniffing to determine the real type; content-type allowlist (images `png/jpeg/gif/webp`, audio, video, `text/plain`, `application/pdf`, `application/zip`, etc.); SVG/HTML rejected as inline (stored as attachment only). **[DESIGN]** Dimensions detected for images/video; quota enforced against `STORAGE_QUOTA_BYTES_PER_GUILD`.
 
-### 2.12 Webhooks & interactions
+### 2.12 Webhooks & commands
+
+> **Implemented shape.** Webhooks are **bearer capabilities**: the high-entropy `token` in the delivery URL is the only credential and is stored **hashed** (SHA-256). There is **no HMAC request signing** and no `signing_secret`. Commands are **first-party** (a fixed server-side registry); there is no application-registration API. **[DESIGN]**
 
 | Method | Path | Auth | Request | Response |
 | --- | --- | --- | --- | --- |
-| `GET` | `/channels/{channel_id}/webhooks` | `MANAGE_WEBHOOKS` | — | `{ items: [webhook] }` |
-| `POST` | `/channels/{channel_id}/webhooks` | `MANAGE_WEBHOOKS` | `{ name, avatar_attachment_id? }` | `201` webhook + one-time `token` + `signing_secret` |
-| `GET` | `/webhooks/{webhook_id}` | `MANAGE_WEBHOOKS` | — | webhook (token omitted) |
-| `PATCH` | `/webhooks/{webhook_id}` | `MANAGE_WEBHOOKS` | `{ name?, channel_id?, avatar_attachment_id? }` | updated webhook |
-| `DELETE` | `/webhooks/{webhook_id}` | `MANAGE_WEBHOOKS` | — | `204` |
-| `POST` | `/webhooks/{webhook_id}/{token}` | public (token) + HMAC | `{ content?, username?, avatar_url?, embeds?, allowed_mentions?, wait? }` + header `X-Nebula-Signature: sha256=<hex>` | `204`, or `200` message when `wait=true` |
-| `GET` | `/applications/{application_id}/commands` | app owner | — | `{ items: [slash_command] }` |
-| `POST` | `/applications/{application_id}/commands` | app owner | `{ name, description, options?, default_member_permissions?, guild_id? }` | `201` command |
-| `DELETE` | `/applications/{application_id}/commands/{command_id}` | app owner | — | `204` |
-| `POST` | `/channels/{channel_id}/interactions` | `USE_APPLICATION_COMMANDS` | `{ command_name, options? }` | `200` interaction result (posted as a message, public or ephemeral) |
+| `GET` | `/channels/{channel_id}/webhooks` | `MANAGE_WEBHOOKS` | — | `{ webhooks: [webhook] }` (token/hash omitted; `tokenPrefix` only) |
+| `POST` | `/channels/{channel_id}/webhooks` | `MANAGE_WEBHOOKS` | `{ name }` | `201 { webhook, token }` — `token` shown **once** |
+| `PATCH` | `/guilds/{guild_id}/webhooks/{webhook_id}` | `MANAGE_WEBHOOKS` | `{ name?, avatarKey?, disabled? }` | `{ webhook }` |
+| `DELETE` | `/guilds/{guild_id}/webhooks/{webhook_id}` | `MANAGE_WEBHOOKS` | — | `204` |
+| `POST` | `/guilds/{guild_id}/webhooks/{webhook_id}/rotate` | `MANAGE_WEBHOOKS` | — | `{ webhook, token }` — new token shown once |
+| `POST` | `/guilds/{guild_id}/webhooks/{webhook_id}/execute` | `MANAGE_WEBHOOKS` | — | `201 { message, duplicate }` (test delivery; secret never revealed) |
+| `GET` | `/guilds/{guild_id}/webhooks/{webhook_id}/deliveries` | `MANAGE_WEBHOOKS` | `?limit(1..50)` | `{ deliveries: [delivery] }` |
+| `POST` | `/guilds/{guild_id}/webhooks/{webhook_id}/avatar` | `MANAGE_WEBHOOKS` | multipart `file` (png/jpeg/gif/webp) | `{ webhook }` |
+| `POST` | `/webhooks/{webhook_id}/{token}` | **public** (URL token) | `{ content?, username?, tts?, embeds? }` + optional `X-Idempotency-Key` | `201 { message, duplicate:false }`; `200 { message, duplicate:true }` on a replayed idempotency key |
+| `GET` | `/commands` | session | `?guildId=` | `{ commands: [command] }` |
+| `POST` | `/interactions` | session (per-command permission) | `{ name? , content?, channelId, invocationId?, args? }` | `200 { result: command_result }` (ephemeral flag set for private replies) |
 
-**Webhook signing:** the sender computes `HMAC-SHA256(signing_secret, raw_body)` and sends it as `X-Nebula-Signature`; the receiver compares in constant time; mismatch → `401 INVALID_SIGNATURE`. The webhook `token` in the URL is a second secret and is stored hashed server-side (`token_hash`). **[DESIGN]**
+**Delivery semantics:** the destination is the webhook's **bound channel** — the request body cannot redirect it (unknown fields are rejected). A wrong/unknown token → `401`; a **disabled** webhook → `403`; a deleted webhook → `404`. Delivery is **idempotent** per `X-Idempotency-Key` per webhook, and is limited to **30 deliveries / 10 s per webhook** (`429 RATE_LIMITED` beyond that). Embeds are validated, length-capped and stored verbatim; **no URL is ever fetched** (no link preview, no outbound HTTP → no SSRF). Lifecycle changes are written to the guild audit log (create=50, update/rotate/disable=51, delete=52).
+
+**First-party commands:** `/ping`, `/help`, `/shrug`, `/me`, `/user`, `/server`, `/nick`, `/slowmode`, `/timeout`, `/poll`, `/topic`. Permission-gated ones require `MODERATE_MEMBERS` (`/timeout`), `MANAGE_CHANNELS` (`/slowmode`, `/topic`), `CHANGE_NICKNAME` (`/nick`) or `VIEW_CHANNEL` (`/server`). Invocation is limited to **20 / 10 s per user** and de-duplicated by `invocationId`.
+
+**Command result:** `{ command, invocationId, channelId, content, ephemeral }`. `ephemeral:true` (default for informational commands) is returned only to the invoker; commands marked `posts:true` (`/shrug`, `/me`, `/poll`) create a normal channel message instead.
+
+**[Not built]** `GET/POST/DELETE /applications/{id}/commands` — there is no third-party application/OAuth2 platform.
 
 **Webhook message defaults:** `allowed_mentions` parses **users only** unless configured. **[VERIFIED: interaction/webhook default parse]**
 
@@ -367,9 +383,11 @@ Legend for **Auth**: `public` (no session), `session` (any authenticated user), 
 | `RELATIONSHIP_UPDATE` | `{ relationship }` | user room |
 | `RELATIONSHIP_REMOVE` | `{ user_id }` | user room |
 | `INVITE_CREATE` / `INVITE_DELETE` | `{ invite }` / `{ code, channel_id, guild_id? }` | guild room |
-| `WEBHOOKS_UPDATE` | `{ guild_id, channel_id }` | guild room (`MANAGE_WEBHOOKS`) |
+| `INTERACTION_RESULT` | `{ command, invocationId, channelId, content, ephemeral }` | invoking user only (ephemeral reply) |
 | `VOICE_STATE_UPDATE` | `{ voice_state }` (join/leave/mute/move) | guild room (or DM recipients) |
 | `VOICE_SIGNAL` | `{ from_user_id, channel_id, payload }` | addressed to `target_user_id` only |
+
+> **Event-name authority.** The canonical, code-generated list is [`packages/shared/src/realtime.ts`](../packages/shared/src/realtime.ts). Some names above are grouped for readability (e.g. pins are delivered as `CHANNEL_PINS_UPDATE`); `WEBHOOKS_UPDATE` is **not emitted** — the webhook console refetches on demand.
 
 ### 3.5 Key DTO shapes
 

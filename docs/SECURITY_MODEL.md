@@ -5,7 +5,7 @@
 | Document | SECURITY_MODEL.md |
 | Status | **Implemented (verified)** — controls are implemented and covered by 14 integration/security tests + scrypt/cookie/CSRF unit assertions (see [FINAL_ACCEPTANCE_REPORT.md](./FINAL_ACCEPTANCE_REPORT.md) §8 for remaining hardening notes) |
 | Version | 0.1.0 |
-| Last updated | 2026-10-17 |
+| Last updated | 2026-10-19 |
 
 > Status note: every control below is a **design commitment**, not a verified behavior. The authorization test-case table (§11) is the acceptance gate: no resource-handling feature may be marked `Implemented-verified` until its cases pass. Discord-derived rules are marked **[VERIFIED]**.
 
@@ -27,7 +27,7 @@
 
 | STRIDE | Threat | Example in Nebula | Primary mitigations |
 | --- | --- | --- | --- |
-| **S**poofing | Impersonate a user or a webhook | Stolen/forged session cookie; forged webhook call | HttpOnly sessions, `Secure`+`SameSite`, HMAC-signed webhooks, constant-time compares |
+| **S**poofing | Impersonate a user or a webhook | Stolen/forged session cookie; forged webhook call | HttpOnly sessions, `Secure`+`SameSite`, high-entropy bearer webhook tokens stored only as a SHA-256 hash, constant-time compares |
 | **T**ampering | Alter requests or stored data | CSRF (forced state change); parameter tampering (`type` on overwrite) | CSRF double-submit, Zod validation, server-side re-derivation of `mention`/permissions |
 | **R**epudiation | Deny a privileged action | Moderator claims they didn't ban | Append-only `audit_log_entries` with actor/target/reason |
 | **I**nformation disclosure | Read others' private data | IDOR on `/channels/{id}/messages`; attachment URL guessing; user enumeration | Per-resource authorization, auth-gated attachment route, generic login errors |
@@ -159,9 +159,10 @@ can(user, action, target):
 
 ## 9. Rate limiting & abuse **[DESIGN]**
 
-- Buckets are keyed in Redis: per **user** (or IP for anonymous), per **route bucket** (`X-RateLimit-Bucket`-style grouping), and a **global** per-identity cap. Responses expose `X-RateLimit-*` headers and `429` with `retry_after`; modeled on Discord's documented scheme. **[VERIFIED: header format/429]**
-- Sensible defaults: login/register strict per-IP (e.g. 5/min) and fail-closed when Redis is unavailable; message send 5/5 s per channel + slowmode; typing coalesced; uploads 10/min; search 10/min; friend requests 20/day.
+- Buckets are keyed per identity (user or IP for anonymous) plus a **global** cap; responses expose `x-ratelimit-limit` / `x-ratelimit-remaining` / `x-ratelimit-reset` and a `429` with `error.code = RATE_LIMITED` (`details.retryAfterMs`), modeled on Discord's documented scheme. **[VERIFIED: header format/429]**
+- Defaults: a global per-identity cap (`RATE_LIMIT_MAX`, default 600/min) plus stricter per-route buckets (login/register, message send + slowmode, typing coalesced, uploads, search, friend requests).
 - **Slowmode** (`rate_limit_per_user` 0–21600 s) is enforced per channel using a Redis key; `BYPASS_SLOWMODE` exempt. **[VERIFIED: bit 52 & range]**
+- **Feature-specific buckets (in-process, sliding window):** webhook delivery **30 / 10 s per webhook**; command invocation **20 / 10 s per user** (both `429 RATE_LIMITED`). **[VERIFIED: integration + e2e]**
 - **Connection limits:** max sockets per user and per IP; oversized/slow sockets disconnected (see architecture backpressure).
 - **Fail posture:** sensitive routes (auth) **fail closed** when the limiter is unavailable; benign routes fail open with a loud log. This per-route policy is **[DESIGN OPEN]**.
 
@@ -170,10 +171,12 @@ can(user, action, target):
 ## 10. Webhooks, secrets, logging
 
 ### 10.1 Webhook authenticity
-- Incoming webhook URLs contain a high-entropy `token`, stored only as `token_hash`. Possession of the URL is necessary but not sufficient.
-- Requests must carry `X-Nebula-Signature: sha256=<hex>` = `HMAC-SHA256(signing_secret, raw_request_body)`, verified with `crypto.timingSafeEqual` over the raw bytes **before** JSON parsing. Mismatch → `401 INVALID_SIGNATURE`.
-- The `signing_secret` is shown once at creation and stored encrypted-at-rest if a KMS/key is configured; otherwise stored as bytes with access restricted to the app role. Rotation is supported (one-time display of the new secret).
-- Webhooks can only post to their bound channel; permission to manage them is `MANAGE_WEBHOOKS`. **[VERIFIED: bit 29]**
+- A webhook is a **bearer capability**: the high-entropy `token` in the delivery URL (`POST /api/webhooks/{id}/{token}`) is the only credential. It is stored **only as a SHA-256 hash** (`token_hash`) and never returned after the one-time creation/rotation display. Possession of the URL is both necessary and sufficient — treat it as a credential. **[VERIFIED: e2e + integration]**
+- The delivery endpoint is **public by design** (no session cookie, no CSRF); it authenticates via the URL token only. A wrong/unknown token → `401`; a **disabled** webhook → `403`; a deleted webhook → `404`.
+- The destination channel is **bound to the webhook**; the request body cannot redirect it (unknown fields are rejected). **[VERIFIED: e2e cross-channel case]**
+- Delivery is **idempotent** per `X-Idempotency-Key` (scoped per webhook) and **rate-limited to 30 deliveries / 10 s per webhook** (`429 RATE_LIMITED`). Managing webhooks requires `MANAGE_WEBHOOKS`. **[VERIFIED: bit 29 + e2e rate-limit case]**
+- **No HMAC request signing** is implemented, and **no outbound URL is ever fetched** (embeds are validated/stored verbatim; no link-preview fetch) — no signing secret to manage, no SSRF surface. **[Not built: signing]**
+- Lifecycle changes are recorded in the guild audit log (create=50, update/rotate/disable=51, delete=52). **[VERIFIED: integration + e2e]**
 
 ### 10.2 Secret management
 - Required secrets come from env (`SESSION_SECRET`, DB/Redis credentials, optional `SMTP_URL`, storage credentials). `.env.example` documents them; `.env` is git-ignored.
@@ -235,6 +238,8 @@ Each case must be automated by an integration/security test (see [TEST_PLAN.md](
 | V-16 | Banned user | `POST /invites/{code}` to rejoin | `403` |
 | V-17 | Any user | Forge `type` on `PUT /channels/{id}/permissions/{x}` to bypass scope | validated; invalid target rejected |
 | V-18 | Anonymous | Any authenticated route | `401 UNAUTHENTICATED` |
+| V-19 | Member without `MANAGE_WEBHOOKS` | Create/rotate/disable/delete/read a channel webhook | `403 MISSING_PERMISSIONS`; no state change |
+| V-20 | Member without `MANAGE_CHANNELS` | `/topic <text>` slash command | `403`; channel topic unchanged (read-only `/topic` still works) |
 
 ### 11.3 Session / CSRF / auth cases
 
@@ -260,9 +265,13 @@ Each case must be automated by an integration/security test (see [TEST_PLAN.md](
 | U-05 | Crafted filename with `../` | key is server-generated; no traversal |
 | I-01 | Message content `<script>` / `javascript:` link | rendered as text / link rejected; no script executes |
 | I-02 | `id` parameter `1 OR 1=1` on any route | treated as invalid snowflake; no SQL effect |
-| W-01 | Webhook call with wrong/missing signature | `401 INVALID_SIGNATURE` |
-| W-02 | Webhook call to an unbound channel | `404`/`403`; no message created |
-| W-03 | Webhook body parsed before signature check | signature verified on raw body first |
+| W-01 | Webhook call with a wrong/unknown token | `401 UNAUTHENTICATED`; no message created |
+| W-02 | Webhook body tries to redirect the destination (`channelId`/unknown field) | `400` (strict schema); posts only to the bound channel |
+| W-03 | Deliver to a **disabled** webhook | `403`; no message created |
+| W-04 | Exceed the per-webhook delivery rate limit | `429 RATE_LIMITED` after 30 / 10 s |
+| W-05 | Reuse a **rotated** token / deliver to a **deleted** webhook | `401` / `404` |
+| W-06 | Read webhook list / delivery history | `token`/`token_hash` never present (`tokenPrefix` only) |
+| W-07 | Embed URL points at an internal/non-routable address | stored verbatim, **never fetched** (no outbound HTTP → no SSRF) |
 
 ---
 
@@ -281,6 +290,6 @@ Each case must be automated by an integration/security test (see [TEST_PLAN.md](
 ## 13. Uncertainty / open items
 - **[UNKNOWN]** Discord's exact internal session/CSRF mechanics are not replicated; Nebula defines its own (cookie + double-submit). No parity is claimed.
 - **[DESIGN OPEN]** Argon2id vs scrypt (chosen: scrypt to avoid a native build dependency) may be revisited if `node:crypto` gains Argon2 or a WASM build is acceptable.
-- **[DESIGN OPEN]** `signing_secret`/`token_hash` at-rest encryption requires a key-management decision; without a KMS they are stored as restricted-access bytes.
+- **[DESIGN OPEN]** `token_hash` at-rest encryption requires a key-management decision; without a KMS it is stored as a restricted-access text column. (There is no `signing_secret` — webhook request signing was not built.)
 - **[DESIGN OPEN]** Whether the slice implements TOTP enrollment or only the `mfa_level` gating.
 - **[DESIGN OPEN]** Malware scanning for uploads is out of scope; a future AV integration is documented.
