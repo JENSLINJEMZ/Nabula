@@ -45,4 +45,11 @@ export function subscribe(set: SetState, get: GetState): void {
     // Re-sync after any reconnect: the gateway re-emits READY on IDENTIFY.
     s.emit("IDENTIFY");
   });
+  // The server force-disconnects sockets whose session was revoked (logout on
+  // another device, password change/reset, "log out all"). Reflect that state
+  // change locally instead of silently reconnecting with a dead cookie.
+  s.on("SESSION_REVOKED", () => {
+    const state = get();
+    state.forceSignOut("Your session was signed out on another device.");
+  });
 }

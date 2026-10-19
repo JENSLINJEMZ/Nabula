@@ -51,6 +51,18 @@ export default defineConfig({
         // later specs. The limiter stays active (just with headroom); its
         // behaviour is asserted by the server's security integration tests.
         RATE_LIMIT_MAX: process.env.RATE_LIMIT_MAX ?? "5000",
+        // Account-security tests read captured emails from disk instead of a
+        // real SMTP server (see apps/server/src/mail/mailer.ts). Absolute so
+        // the Playwright worker can find it regardless of its cwd.
+        MAIL_DEV_DIR: process.env.MAIL_DEV_DIR ?? "/tmp/opencode/nebula-e2e-mail",
+        // Specs read verification/reset links from that disk capture, so the
+        // e2e server must never use a real relay configured in the developer's
+        // apps/server/.env. Blank counts as unset (see apps/server/src/config.ts).
+        SMTP_URL: "",
+        SMTP_HOST: "",
+        SMTP_PORT: "",
+        SMTP_USER: "",
+        SMTP_PASS: "",
       },
     },
     {

@@ -5,6 +5,7 @@ import { useApp } from "../store";
 import { apiDelete, apiGet, apiPost } from "../lib/api";
 import { cx, displayName } from "../lib/ui";
 import { Avatar, Switch } from "./primitives";
+import { AccountSecurityTab } from "./AccountSecurity";
 
 interface SessionInfo {
   id: string;
@@ -23,7 +24,7 @@ const PRESENCE_OPTIONS = [
   { value: "invisible", label: "Invisible" },
 ];
 
-const TABS = ["account", "profile", "appearance", "notifications", "sessions"] as const;
+const TABS = ["account", "security", "profile", "appearance", "notifications", "sessions"] as const;
 type TabId = (typeof TABS)[number];
 
 export function Settings({ onClose }: { onClose: () => void }) {
@@ -161,10 +162,14 @@ export function Settings({ onClose }: { onClose: () => void }) {
                   <p className="flex items-center gap-2 text-slate-300">
                     <ShieldAlert size={15} aria-hidden /> Security
                   </p>
-                  <p className="mt-1 text-xs">Two-factor is not configured in this deployment. Manage active sessions under the Sessions tab.</p>
+                  <p className="mt-1 text-xs">
+                    Manage your password, email verification and two-factor authentication under the Security tab.
+                  </p>
                 </div>
               </div>
             )}
+
+            {tab === "security" && <AccountSecurityTab />}
 
             {tab === "profile" && (
               <div className="space-y-5">

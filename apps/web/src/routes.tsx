@@ -1,6 +1,8 @@
 import { useEffect, useRef } from "react";
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from "react-router-dom";
 import { ChatShell } from "./components/Chat";
+import { AuthScreen } from "./components/Auth";
+import { ForgotPasswordPage, ResetPasswordPage, VerifyEmailPage } from "./components/PublicAuthPages";
 import { ApiError } from "./lib/api";
 import { LAST_CHANNEL_KEY, LAST_DM_KEY, LAST_GUILD_KEY, setRouterNavigator, useApp } from "./store";
 
@@ -164,5 +166,23 @@ export function AppRoutes() {
         <Route path="*" element={<NotFound />} />
       </Routes>
     </>
+  );
+}
+
+/**
+ * Top-level router used by App: the account pages (forgot/reset/verify) are
+ * reachable in both signed-in and signed-out states (an email link may be
+ * opened while logged out); everything else renders the authenticated app or
+ * the auth screen.
+ */
+export function PublicAccountRoutes() {
+  const me = useApp((s) => s.me);
+  return (
+    <Routes>
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/verify-email" element={<VerifyEmailPage />} />
+      <Route path="*" element={me ? <AppRoutes /> : <AuthScreen />} />
+    </Routes>
   );
 }

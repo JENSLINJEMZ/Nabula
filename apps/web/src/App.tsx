@@ -1,13 +1,11 @@
 import { useEffect } from "react";
 import { BrowserRouter } from "react-router-dom";
 import { useApp } from "./store";
-import { AuthScreen } from "./components/Auth";
-import { AppRoutes } from "./routes";
+import { PublicAccountRoutes } from "./routes";
 import { ToastHost } from "./components/Toast";
 
 export default function App() {
   const booted = useApp((s) => s.booted);
-  const me = useApp((s) => s.me);
   const bootstrap = useApp((s) => s.bootstrap);
   const toast = useApp((s) => s.toast);
   const dismissToast = useApp((s) => s.dismissToast);
@@ -30,7 +28,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <div className="h-full">
-        {me ? <AppRoutes /> : <AuthScreen />}
+        <PublicAccountRoutes />
         <ToastHost toast={toast} onClose={dismissToast} />
       </div>
     </BrowserRouter>

@@ -59,6 +59,9 @@ export type {
 
 export type Toast = { kind: "error" | "info" | "success"; message: string } | null;
 
+/** Outcome of a password login: either a session or a pending 2FA challenge. */
+export type LoginResult = { mfaRequired: false } | { mfaRequired: true; challengeToken: string };
+
 export { applyRealtime } from "./realtime";
 
 /* ----------------------------------------------------------------- state */
@@ -147,9 +150,15 @@ export interface AppState {
   commandResults: Record<string, CommandResult[]>;
   webhooksByChannel: Record<string, Webhook[]>;
   bootstrap: () => Promise<void>;
-  login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string, inviteCode?: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<LoginResult>;
+  completeMfaLogin: (
+    challengeToken: string,
+    factor: { code?: string; recoveryCode?: string },
+  ) => Promise<void>;
+  refreshSelf: () => Promise<void>;
+  register: (username: string, password: string, inviteCode?: string, email?: string) => Promise<void>;
   logout: () => Promise<void>;
+  forceSignOut: (reason?: string) => void;
   connectRealtime: () => Promise<void>;
   pushToast: (toast: Toast) => void;
   dismissToast: () => void;
@@ -360,15 +369,43 @@ export const useApp = create<AppState>()((set, get) => {
     },
 
     async login(username, password) {
-      const res = await apiPost<{ user: SelfUser }>("/api/auth/login", { username, password });
-      set({ me: res.user });
+      const res = await apiPost<
+        { user: SelfUser } | { mfaRequired: true; challengeToken: string }
+      >("/api/auth/login", { username, password });
+      if ("mfaRequired" in res && res.mfaRequired) {
+        return { mfaRequired: true, challengeToken: res.challengeToken };
+      }
+      const { user } = res as { user: SelfUser };
+      set({ me: user });
+      await Promise.all([get().loadGuilds(), get().loadDms(), get().loadRelationships(), get().loadReadStates()]);
+      void get().loadNotifications();
+      await get().connectRealtime();
+      return { mfaRequired: false };
+    },
+
+    async completeMfaLogin(challengeToken, factor) {
+      const res = await apiPost<{ user: SelfUser }>("/api/auth/login/2fa", {
+        challengeToken,
+        ...factor,
+      });
+      set({ me: res.user, toast: { kind: "success", message: "Two-factor authentication verified." } });
       await Promise.all([get().loadGuilds(), get().loadDms(), get().loadRelationships(), get().loadReadStates()]);
       void get().loadNotifications();
       await get().connectRealtime();
     },
 
-    async register(username, password, inviteCode) {
-      const res = await apiPost<{ user: SelfUser }>("/api/auth/register", { username, password, inviteCode: inviteCode || null });
+    async refreshSelf() {
+      const res = await apiGet<{ user: SelfUser | null }>("/api/auth/me");
+      if (res.user) set({ me: res.user });
+    },
+
+    async register(username, password, inviteCode, email) {
+      const res = await apiPost<{ user: SelfUser }>("/api/auth/register", {
+        username,
+        password,
+        inviteCode: inviteCode || null,
+        email: email?.trim() ? email.trim() : null,
+      });
       set({ me: res.user });
       await Promise.all([get().loadGuilds(), get().loadDms()]);
       await get().connectRealtime();
@@ -378,29 +415,34 @@ export const useApp = create<AppState>()((set, get) => {
       try {
         await apiPost("/api/auth/logout");
       } finally {
-        disconnectSocket();
-        set({
-          me: null,
-          guilds: [],
-          channelsByGuild: {},
-          rolesByGuild: {},
-          membersByGuild: {},
-          dms: [],
-          messagesByChannel: {},
-          pinnedByChannel: {},
-          relationships: [],
-          notifications: [],
-          readStates: {},
-          activeGuildId: null,
-          activeChannelId: null,
-          activeDmId: null,
-          activeThreadId: null,
-          threadsByChannel: {},
-          threadDrafts: {},
-          ready: false,
-        });
-        navTo?.("/");
+        get().forceSignOut();
       }
+    },
+
+    forceSignOut(reason) {
+      disconnectSocket();
+      set({
+        me: null,
+        guilds: [],
+        channelsByGuild: {},
+        rolesByGuild: {},
+        membersByGuild: {},
+        dms: [],
+        messagesByChannel: {},
+        pinnedByChannel: {},
+        relationships: [],
+        notifications: [],
+        readStates: {},
+        activeGuildId: null,
+        activeChannelId: null,
+        activeDmId: null,
+        activeThreadId: null,
+        threadsByChannel: {},
+        threadDrafts: {},
+        ready: false,
+        ...(reason ? { toast: { kind: "error" as const, message: reason } } : {}),
+      });
+      navTo?.("/");
     },
 
     async connectRealtime() {
